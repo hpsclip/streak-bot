@@ -189,7 +189,7 @@ client.on('interactionCreate', async (interaction) => {
     data._config.updatesChannel = channel.id;
     saveData();
 
-    return interaction.reply('✅ Updates channel set');
+    return interaction.reply('✅ Updates channel set!');
   }
 
   // SEND UPDATE
