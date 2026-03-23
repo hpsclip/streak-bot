@@ -9,7 +9,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ]
 });
 
@@ -21,6 +22,14 @@ if (fs.existsSync('data.json')) {
 
 function saveData() {
   fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
+}
+
+// ===== RANK SYSTEM =====
+function getRank(streak) {
+  if (streak >= 25) return "🏆 Elite";
+  if (streak >= 10) return "🔥 Grinder";
+  if (streak >= 4) return "⚡ Active";
+  return "🌱 Beginner";
 }
 
 // ===== COMMANDS =====
@@ -40,21 +49,25 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('topstreaks')
-    .setDescription('View leaderboard')
+    .setDescription('Leaderboard'),
+
+  new SlashCommandBuilder()
+    .setName('vacation')
+    .setDescription('Pause your streak (max 7 days)')
+    .addIntegerOption(option =>
+      option.setName('days')
+        .setDescription('Days to pause (1-7)')
+        .setRequired(true)
+    )
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
-  try {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-    console.log('✅ Slash commands registered');
-  } catch (err) {
-    console.error(err);
-  }
+  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+  console.log("✅ Slash commands registered");
 })();
 
-// ===== READY =====
 client.on('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
@@ -66,7 +79,13 @@ client.on('interactionCreate', async (interaction) => {
   const id = interaction.user.id;
 
   if (!data[id]) {
-    data[id] = { streak: 0, lastDate: null, timezone: null, best: 0 };
+    data[id] = {
+      streak: 0,
+      lastDate: null,
+      timezone: null,
+      best: 0,
+      vacationUntil: null
+    };
   }
 
   const user = data[id];
@@ -76,30 +95,13 @@ client.on('interactionCreate', async (interaction) => {
     const tz = interaction.options.getString('timezone');
 
     if (!moment.tz.zone(tz)) {
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xff0000)
-            .setTitle('❌ Invalid Timezone')
-            .setDescription(
-              'Example: `America/New_York`\n\nFind yours:\nhttps://en.wikipedia.org/wiki/List_of_tz_database_time_zones'
-            )
-        ],
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ Invalid timezone", ephemeral: true });
     }
 
     user.timezone = tz;
     saveData();
 
-    return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x00ff00)
-          .setTitle('✅ Timezone Set')
-          .setDescription(`Your timezone is now **${tz}**`)
-      ]
-    });
+    return interaction.reply("✅ Timezone set");
   }
 
   // STREAK
@@ -110,8 +112,9 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(0x0099ff)
           .setTitle('🔥 Your Streak')
           .addFields(
-            { name: 'Current', value: `${user.streak} days`, inline: true },
-            { name: 'Best', value: `${user.best} days`, inline: true }
+            { name: 'Current', value: `${user.streak}`, inline: true },
+            { name: 'Best', value: `${user.best}`, inline: true },
+            { name: 'Rank', value: getRank(user.streak), inline: true }
           )
       ]
     });
@@ -128,77 +131,46 @@ client.on('interactionCreate', async (interaction) => {
     for (let i = 0; i < sorted.length; i++) {
       const member = await interaction.guild.members.fetch(sorted[i][0]).catch(() => null);
       const name = member ? member.user.username : 'Unknown';
-      desc += `**${i + 1}.** ${name} — 🔥 ${sorted[i][1].streak} days\n`;
+      desc += `**${i + 1}.** ${name} — 🔥 ${sorted[i][1].streak} (${getRank(sorted[i][1].streak)})\n`;
     }
 
     return interaction.reply({
       embeds: [
         new EmbedBuilder()
           .setColor(0xffd700)
-          .setTitle('🏆 Top Streaks')
-          .setDescription(desc || 'No data yet')
+          .setTitle('🏆 Leaderboard')
+          .setDescription(desc || 'No data')
       ]
     });
   }
+
+  // VACATION
+  if (interaction.commandName === 'vacation') {
+    const days = interaction.options.getInteger('days');
+
+    if (days < 1 || days > 7) {
+      return interaction.reply({ content: "❌ Max 7 days", ephemeral: true });
+    }
+
+    user.vacationUntil = moment().add(days, 'days').toISOString();
+    saveData();
+
+    return interaction.reply(`🌴 Vacation mode ON for ${days} days`);
+  }
 });
 
-// ===== MESSAGE TRACKING (CLEAN SYSTEM) =====
+// ===== MESSAGE TRACKING =====
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
-  if (message.content.length < 3) return; // anti spam
+  if (message.content.length < 3) return;
 
   const id = message.author.id;
 
   if (!data[id]) {
-    data[id] = { streak: 0, lastDate: null, timezone: null, best: 0 };
+    data[id] = { streak: 0, lastDate: null, timezone: null, best: 0, vacationUntil: null };
   }
 
   const user = data[id];
-
   if (!user.timezone) return;
 
-  const today = moment().tz(user.timezone).format('YYYY-MM-DD');
-
-  // ONLY RUN ON FIRST MESSAGE OF THE DAY
-  if (user.lastDate === today) return;
-
-  const yesterday = moment().tz(user.timezone).subtract(1, 'day').format('YYYY-MM-DD');
-
-  let embed;
-
-  if (!user.lastDate) {
-    user.streak = 1;
-    user.best = 1;
-
-    embed = new EmbedBuilder()
-      .setColor(0x00ff00)
-      .setTitle('✨ New Streak')
-      .setDescription('You started your streak (1 day)');
-  }
-  else if (user.lastDate === yesterday) {
-    user.streak++;
-
-    if (user.streak > user.best) user.best = user.streak;
-
-    embed = new EmbedBuilder()
-      .setColor(0x00ffcc)
-      .setTitle('🔥 Streak Continued')
-      .setDescription(`Now at **${user.streak} days**`);
-  }
-  else {
-    user.streak = 1;
-
-    embed = new EmbedBuilder()
-      .setColor(0xff0000)
-      .setTitle('💀 Streak Reset')
-      .setDescription('Missed a day. Back to **1**');
-  }
-
-  user.lastDate = today;
-  saveData();
-
-  // CLEAN: only reply once per day
-  message.reply({ embeds: [embed] });
-});
-
-client.login(TOKEN);
+  const now = moment().tz(user.time
