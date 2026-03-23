@@ -30,13 +30,14 @@ function getRank(streak) {
   return '🌱 Beginner';
 }
 
-// ===== COMMANDS (FIXED) =====
+// ===== COMMANDS (100% SAFE) =====
 const commands = [
   new SlashCommandBuilder()
     .setName('settz')
     .setDescription('Set your timezone')
-    .addStringOption(o =>
-      o.setName('timezone')
+    .addStringOption(option =>
+      option
+        .setName('timezone')
         .setDescription('Example: America/New_York')
         .setRequired(true)
     ),
@@ -52,15 +53,16 @@ const commands = [
   new SlashCommandBuilder()
     .setName('vacation')
     .setDescription('Pause your streak')
-    .addIntegerOption(o =>
-      o.setName('days')
+    .addIntegerOption(option =>
+      option
+        .setName('days')
         .setDescription('Number of days (max 7)')
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('View help menu'),
+    .setDescription('Show help menu'),
 
   new SlashCommandBuilder()
     .setName('stats')
@@ -69,27 +71,37 @@ const commands = [
   new SlashCommandBuilder()
     .setName('setupdateschannel')
     .setDescription('Set updates channel')
-    .addChannelOption(o =>
-      o.setName('channel')
-        .setDescription('Channel to send updates in')
+    .addChannelOption(option =>
+      option
+        .setName('channel')
+        .setDescription('Channel where updates will be sent')
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName('update')
     .setDescription('Send update message')
-    .addStringOption(o =>
-      o.setName('message')
-        .setDescription('What changed')
+    .addStringOption(option =>
+      option
+        .setName('message')
+        .setDescription('Update details')
         .setRequired(true)
     )
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
+// REGISTER COMMANDS
 (async () => {
-  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log('✅ Commands registered');
+  try {
+    await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
+      { body: commands }
+    );
+    console.log('✅ Commands registered');
+  } catch (err) {
+    console.error(err);
+  }
 })();
 
 // ===== READY =====
@@ -117,6 +129,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const user = data[id];
 
+  // HELP
   if (interaction.commandName === 'help') {
     return interaction.reply({
       embeds: [
@@ -126,7 +139,7 @@ client.on('interactionCreate', async (interaction) => {
           .setDescription(
             '/settz – set timezone\n' +
             '/streak – check streak\n' +
-            '/stats – detailed stats\n' +
+            '/stats – stats\n' +
             '/topstreaks – leaderboard\n' +
             '/vacation – pause streak\n\n' +
             'Talk once daily to keep streak.\n\n' +
@@ -136,6 +149,7 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
+  // SET TZ
   if (interaction.commandName === 'settz') {
     const tz = interaction.options.getString('timezone');
 
@@ -149,6 +163,7 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.reply(`✅ Timezone set to ${tz}`);
   }
 
+  // STREAK
   if (interaction.commandName === 'streak') {
     return interaction.reply({
       embeds: [
@@ -164,8 +179,9 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
+  // STATS
   if (interaction.commandName === 'stats') {
-    const hist = user.history.slice(-7).map(v => v ? '✅' : '❌').join(' ');
+    const hist = user.history.slice(-7).map(v => v ? '✅' : '❌').join(' ') || 'No data';
 
     return interaction.reply({
       embeds: [
@@ -176,27 +192,29 @@ client.on('interactionCreate', async (interaction) => {
             { name: 'Current', value: `${user.streak}`, inline: true },
             { name: 'Best', value: `${user.best}`, inline: true },
             { name: 'Rank', value: getRank(user.streak), inline: true },
-            { name: 'Last 7 Days', value: hist || 'No data' }
+            { name: 'Last 7 Days', value: hist }
           )
       ]
     });
   }
 
+  // LEADERBOARD
   if (interaction.commandName === 'topstreaks') {
     const sorted = Object.entries(data)
       .filter(([k]) => k !== '_config')
       .sort((a, b) => b[1].streak - a[1].streak)
       .slice(0, 10);
 
-    let desc = sorted.map((u, i) =>
+    const desc = sorted.map((u, i) =>
       `**${i + 1}.** <@${u[0]}> — 🔥 ${u[1].streak}`
-    ).join('\n');
+    ).join('\n') || 'No data';
 
     return interaction.reply({
-      embeds: [new EmbedBuilder().setColor(0xffd700).setTitle('🏆 Leaderboard').setDescription(desc || 'No data')]
+      embeds: [new EmbedBuilder().setColor(0xffd700).setTitle('🏆 Leaderboard').setDescription(desc)]
     });
   }
 
+  // VACATION
   if (interaction.commandName === 'vacation') {
     const days = interaction.options.getInteger('days');
 
@@ -207,15 +225,17 @@ client.on('interactionCreate', async (interaction) => {
     user.vacationUntil = moment().add(days, 'days').valueOf();
     saveData();
 
-    return interaction.reply(`✈️ Vacation enabled for ${days} days`);
+    return interaction.reply(`✈️ Vacation for ${days} days`);
   }
 
+  // SET UPDATE CHANNEL
   if (interaction.commandName === 'setupdateschannel') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return interaction.reply({ content: 'Admin only', ephemeral: true });
     }
 
     const ch = interaction.options.getChannel('channel');
+
     data._config = data._config || {};
     data._config.updatesChannel = ch.id;
     saveData();
@@ -223,6 +243,7 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.reply('✅ Updates channel set');
   }
 
+  // SEND UPDATE
   if (interaction.commandName === 'update') {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return interaction.reply({ content: 'Admin only', ephemeral: true });
@@ -237,7 +258,7 @@ client.on('interactionCreate', async (interaction) => {
 
     const ch = await client.channels.fetch(chId);
 
-    ch.send({
+    await ch.send({
       embeds: [
         new EmbedBuilder()
           .setColor(0x00ffcc)
@@ -252,15 +273,14 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ===== MESSAGE TRACKING =====
-client.on('messageCreate', async (message) => {
+client.on('messageCreate', (message) => {
   if (message.author.bot) return;
   if (message.content.length < 3) return;
 
   const id = message.author.id;
-  if (!data[id]) return;
-
   const user = data[id];
-  if (!user.timezone) return;
+
+  if (!user || !user.timezone) return;
 
   const now = moment().tz(user.timezone);
   const today = now.format('YYYY-MM-DD');
@@ -275,71 +295,18 @@ client.on('messageCreate', async (message) => {
   user.history.push(user.lastDate === yesterday);
   if (user.history.length > 7) user.history.shift();
 
-  let msg;
-
   if (!user.lastDate) {
     user.streak = 1;
     user.best = 1;
-    msg = '✨ New streak (1)';
   } else if (user.lastDate === yesterday) {
     user.streak++;
     if (user.streak > user.best) user.best = user.streak;
-
-    if (user.history.slice(-7).every(v => v)) {
-      msg = `🔥 ${user.streak} day streak\n🏆 Perfect Week!`;
-    } else {
-      msg = `🔥 ${user.streak} day streak`;
-    }
   } else {
     user.streak = 1;
-    msg = '💀 Reset (1)';
   }
 
   user.lastDate = today;
   saveData();
-
-  message.reply(msg);
 });
-
-// ===== SMART REMINDER =====
-setInterval(async () => {
-  for (const id in data) {
-    if (id === '_config') continue;
-
-    const user = data[id];
-    if (!user.timezone || user.lastActiveHour === null) continue;
-
-    const now = moment().tz(user.timezone);
-    const today = now.format('YYYY-MM-DD');
-
-    if (user.lastDate === today) continue;
-
-    if (now.hour() === user.lastActiveHour - 2) {
-      try {
-        const u = await client.users.fetch(id);
-        u.send('⚠️ Don’t lose your streak!');
-      } catch {}
-    }
-  }
-}, 60000);
-
-// ===== LAST WARNING =====
-setInterval(async () => {
-  for (const id in data) {
-    if (id === '_config') continue;
-
-    const user = data[id];
-    if (!user.timezone) continue;
-
-    const now = moment().tz(user.timezone);
-
-    if (now.hour() === 23 && user.lastDate !== now.format('YYYY-MM-DD')) {
-      try {
-        const u = await client.users.fetch(id);
-        u.send('🚨 LAST CHANCE: talk now!');
-      } catch {}
-    }
-  }
-}, 60000);
 
 client.login(TOKEN);
