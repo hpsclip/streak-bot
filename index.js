@@ -9,8 +9,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -26,10 +25,10 @@ function saveData() {
 
 // ===== RANK SYSTEM =====
 function getRank(streak) {
-  if (streak >= 25) return "🏆 Elite";
-  if (streak >= 10) return "🔥 Grinder";
-  if (streak >= 4) return "⚡ Active";
-  return "🌱 Beginner";
+  if (streak >= 25) return '🏆 No Life';
+  if (streak >= 10) return '🔥 Grinder';
+  if (streak >= 4) return '⚡ Active';
+  return '🌱 Beginner';
 }
 
 // ===== COMMANDS =====
@@ -53,10 +52,10 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('vacation')
-    .setDescription('Pause your streak (max 7 days)')
+    .setDescription('Pause your streak')
     .addIntegerOption(option =>
       option.setName('days')
-        .setDescription('Days to pause (1-7)')
+        .setDescription('Days to pause (max 7)')
         .setRequired(true)
     )
 ];
@@ -65,14 +64,15 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log("✅ Slash commands registered");
+  console.log('✅ Commands registered');
 })();
 
+// ===== READY =====
 client.on('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ===== SLASH COMMANDS =====
+// ===== SLASH =====
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -95,13 +95,13 @@ client.on('interactionCreate', async (interaction) => {
     const tz = interaction.options.getString('timezone');
 
     if (!moment.tz.zone(tz)) {
-      return interaction.reply({ content: "❌ Invalid timezone", ephemeral: true });
+      return interaction.reply({ content: '❌ Invalid timezone', ephemeral: true });
     }
 
     user.timezone = tz;
     saveData();
 
-    return interaction.reply("✅ Timezone set");
+    return interaction.reply(`✅ Timezone set to ${tz}`);
   }
 
   // STREAK
@@ -127,11 +127,8 @@ client.on('interactionCreate', async (interaction) => {
       .slice(0, 10);
 
     let desc = '';
-
     for (let i = 0; i < sorted.length; i++) {
-      const member = await interaction.guild.members.fetch(sorted[i][0]).catch(() => null);
-      const name = member ? member.user.username : 'Unknown';
-      desc += `**${i + 1}.** ${name} — 🔥 ${sorted[i][1].streak} (${getRank(sorted[i][1].streak)})\n`;
+      desc += `**${i + 1}.** <@${sorted[i][0]}> — 🔥 ${sorted[i][1].streak}\n`;
     }
 
     return interaction.reply({
@@ -148,14 +145,15 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.commandName === 'vacation') {
     const days = interaction.options.getInteger('days');
 
-    if (days < 1 || days > 7) {
-      return interaction.reply({ content: "❌ Max 7 days", ephemeral: true });
+    if (days > 7) {
+      return interaction.reply({ content: 'Max 7 days', ephemeral: true });
     }
 
-    user.vacationUntil = moment().add(days, 'days').toISOString();
+    const until = moment().add(days, 'days').valueOf();
+    user.vacationUntil = until;
     saveData();
 
-    return interaction.reply(`🌴 Vacation mode ON for ${days} days`);
+    return interaction.reply(`✈️ Vacation mode enabled for ${days} days`);
   }
 });
 
@@ -167,10 +165,72 @@ client.on('messageCreate', async (message) => {
   const id = message.author.id;
 
   if (!data[id]) {
-    data[id] = { streak: 0, lastDate: null, timezone: null, best: 0, vacationUntil: null };
+    data[id] = {
+      streak: 0,
+      lastDate: null,
+      timezone: null,
+      best: 0,
+      vacationUntil: null
+    };
   }
 
   const user = data[id];
+
   if (!user.timezone) return;
 
-  const now = moment().tz(user.time
+  const now = moment().tz(user.timezone);
+  const today = now.format('YYYY-MM-DD');
+  const tomorrowTime = now.clone().add(1, 'day').startOf('day').format('h:mm A');
+
+  // VACATION PROTECTION
+  if (user.vacationUntil && Date.now() < user.vacationUntil) return;
+
+  if (user.lastDate === today) return;
+
+  const yesterday = now.clone().subtract(1, 'day').format('YYYY-MM-DD');
+
+  let msg;
+
+  if (!user.lastDate) {
+    user.streak = 1;
+    user.best = 1;
+    msg = `✨ New streak (1)\nCome back at ${tomorrowTime}`;
+  } else if (user.lastDate === yesterday) {
+    user.streak++;
+    if (user.streak > user.best) user.best = user.streak;
+    msg = `🔥 ${user.streak} day streak\nCome back at ${tomorrowTime}`;
+  } else {
+    user.streak = 1;
+    msg = `💀 Reset (1)\nCome back at ${tomorrowTime}`;
+  }
+
+  user.lastDate = today;
+  saveData();
+
+  message.reply(msg);
+});
+
+// ===== DAILY REMINDER LOOP =====
+setInterval(async () => {
+  const now = Date.now();
+
+  for (const id in data) {
+    const user = data[id];
+
+    if (!user.timezone) continue;
+    if (user.vacationUntil && now < user.vacationUntil) continue;
+
+    const userTime = moment().tz(user.timezone);
+    const today = userTime.format('YYYY-MM-DD');
+
+    // If they haven’t talked today → remind at 8 PM
+    if (user.lastDate !== today && userTime.hour() === 20) {
+      try {
+        const userObj = await client.users.fetch(id);
+        userObj.send('⚠️ Don’t lose your streak today!');
+      } catch {}
+    }
+  }
+}, 60000); // runs every minute
+
+client.login(TOKEN);
