@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, PermissionsBitField } = require('discord.js');
 const moment = require('moment-timezone');
 const fs = require('fs');
 
@@ -18,12 +18,11 @@ let data = {};
 if (fs.existsSync('data.json')) {
   data = JSON.parse(fs.readFileSync('data.json'));
 }
-
 function saveData() {
   fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
 }
 
-// ===== RANK SYSTEM =====
+// ===== RANK =====
 function getRank(streak) {
   if (streak >= 25) return '🏆 No Life';
   if (streak >= 10) return '🔥 Grinder';
@@ -33,31 +32,26 @@ function getRank(streak) {
 
 // ===== COMMANDS =====
 const commands = [
-  new SlashCommandBuilder()
-    .setName('settz')
-    .setDescription('Set your timezone')
-    .addStringOption(option =>
-      option.setName('timezone')
-        .setDescription('Example: America/New_York')
-        .setRequired(true)
-    ),
+  new SlashCommandBuilder().setName('settz').setDescription('Set timezone')
+    .addStringOption(o => o.setName('timezone').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('streak')
-    .setDescription('Check your streak'),
+  new SlashCommandBuilder().setName('streak').setDescription('Check streak'),
+  new SlashCommandBuilder().setName('topstreaks').setDescription('Leaderboard'),
 
-  new SlashCommandBuilder()
-    .setName('topstreaks')
-    .setDescription('Leaderboard'),
+  new SlashCommandBuilder().setName('vacation').setDescription('Pause streak')
+    .addIntegerOption(o => o.setName('days').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('vacation')
-    .setDescription('Pause your streak')
-    .addIntegerOption(option =>
-      option.setName('days')
-        .setDescription('Days to pause (max 7)')
-        .setRequired(true)
-    )
+  new SlashCommandBuilder().setName('help').setDescription('Help menu'),
+
+  new SlashCommandBuilder().setName('stats').setDescription('Your stats'),
+
+  new SlashCommandBuilder().setName('setupdateschannel')
+    .setDescription('Set updates channel')
+    .addChannelOption(o => o.setName('channel').setRequired(true)),
+
+  new SlashCommandBuilder().setName('update')
+    .setDescription('Send update')
+    .addStringOption(o => o.setName('message').setRequired(true))
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -81,36 +75,55 @@ client.on('interactionCreate', async (interaction) => {
   if (!data[id]) {
     data[id] = {
       streak: 0,
+      best: 0,
       lastDate: null,
       timezone: null,
-      best: 0,
-      vacationUntil: null
+      vacationUntil: null,
+      history: [],
+      lastActiveHour: null
     };
   }
 
   const user = data[id];
 
-  // SET TIMEZONE
+  // ===== HELP =====
+  if (interaction.commandName === 'help') {
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle('📘 Help')
+          .setDescription(
+            '/settz – set timezone\n' +
+            '/streak – view streak\n' +
+            '/stats – detailed stats\n' +
+            '/topstreaks – leaderboard\n' +
+            '/vacation – pause streak\n\n' +
+            'Talk once daily to maintain streak.\n\n' +
+            'Report bugs to moderators.'
+          )
+      ]
+    });
+  }
+
+  // ===== SET TZ =====
   if (interaction.commandName === 'settz') {
     const tz = interaction.options.getString('timezone');
-
     if (!moment.tz.zone(tz)) {
       return interaction.reply({ content: '❌ Invalid timezone', ephemeral: true });
     }
-
     user.timezone = tz;
     saveData();
-
     return interaction.reply(`✅ Timezone set to ${tz}`);
   }
 
-  // STREAK
+  // ===== STREAK =====
   if (interaction.commandName === 'streak') {
     return interaction.reply({
       embeds: [
         new EmbedBuilder()
           .setColor(0x0099ff)
-          .setTitle('🔥 Your Streak')
+          .setTitle('🔥 Streak')
           .addFields(
             { name: 'Current', value: `${user.streak}`, inline: true },
             { name: 'Best', value: `${user.best}`, inline: true },
@@ -120,40 +133,90 @@ client.on('interactionCreate', async (interaction) => {
     });
   }
 
-  // LEADERBOARD
-  if (interaction.commandName === 'topstreaks') {
-    const sorted = Object.entries(data)
-      .sort((a, b) => b[1].streak - a[1].streak)
-      .slice(0, 10);
-
-    let desc = '';
-    for (let i = 0; i < sorted.length; i++) {
-      desc += `**${i + 1}.** <@${sorted[i][0]}> — 🔥 ${sorted[i][1].streak}\n`;
-    }
+  // ===== STATS =====
+  if (interaction.commandName === 'stats') {
+    const historyVisual = user.history.slice(-7).map(d => d ? '✅' : '❌').join(' ');
 
     return interaction.reply({
       embeds: [
         new EmbedBuilder()
-          .setColor(0xffd700)
-          .setTitle('🏆 Leaderboard')
-          .setDescription(desc || 'No data')
+          .setColor(0x00ccff)
+          .setTitle('📊 Your Stats')
+          .addFields(
+            { name: 'Current Streak', value: `${user.streak}`, inline: true },
+            { name: 'Best Streak', value: `${user.best}`, inline: true },
+            { name: 'Rank', value: getRank(user.streak), inline: true },
+            { name: 'Last 7 Days', value: historyVisual || 'No data' }
+          )
       ]
     });
   }
 
-  // VACATION
+  // ===== LEADERBOARD =====
+  if (interaction.commandName === 'topstreaks') {
+    const sorted = Object.entries(data)
+      .filter(([k]) => k !== '_config')
+      .sort((a, b) => b[1].streak - a[1].streak)
+      .slice(0, 10);
+
+    let desc = sorted.map((u, i) =>
+      `**${i + 1}.** <@${u[0]}> — 🔥 ${u[1].streak}`
+    ).join('\n');
+
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder().setColor(0xffd700).setTitle('🏆 Leaderboard').setDescription(desc || 'No data')
+      ]
+    });
+  }
+
+  // ===== VACATION =====
   if (interaction.commandName === 'vacation') {
     const days = interaction.options.getInteger('days');
+    if (days > 7) return interaction.reply({ content: 'Max 7 days', ephemeral: true });
 
-    if (days > 7) {
-      return interaction.reply({ content: 'Max 7 days', ephemeral: true });
-    }
-
-    const until = moment().add(days, 'days').valueOf();
-    user.vacationUntil = until;
+    user.vacationUntil = moment().add(days, 'days').valueOf();
     saveData();
 
-    return interaction.reply(`✈️ Vacation mode enabled for ${days} days`);
+    return interaction.reply(`✈️ Vacation for ${days} days`);
+  }
+
+  // ===== UPDATE SYSTEM =====
+  if (interaction.commandName === 'setupdateschannel') {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ content: 'Admin only', ephemeral: true });
+    }
+
+    const ch = interaction.options.getChannel('channel');
+    data._config = data._config || {};
+    data._config.updatesChannel = ch.id;
+    saveData();
+
+    return interaction.reply(`✅ Updates channel set`);
+  }
+
+  if (interaction.commandName === 'update') {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ content: 'Admin only', ephemeral: true });
+    }
+
+    const msg = interaction.options.getString('message');
+    const chId = data._config?.updatesChannel;
+    if (!chId) return interaction.reply({ content: 'No channel set', ephemeral: true });
+
+    const ch = await client.channels.fetch(chId);
+
+    ch.send({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x00ffcc)
+          .setTitle('🚀 Update')
+          .setDescription(msg)
+          .setTimestamp()
+      ]
+    });
+
+    return interaction.reply({ content: 'Sent', ephemeral: true });
   }
 });
 
@@ -164,44 +227,45 @@ client.on('messageCreate', async (message) => {
 
   const id = message.author.id;
 
-  if (!data[id]) {
-    data[id] = {
-      streak: 0,
-      lastDate: null,
-      timezone: null,
-      best: 0,
-      vacationUntil: null
-    };
-  }
+  if (!data[id]) return;
 
   const user = data[id];
-
   if (!user.timezone) return;
 
   const now = moment().tz(user.timezone);
   const today = now.format('YYYY-MM-DD');
-  const tomorrowTime = now.clone().add(1, 'day').startOf('day').format('h:mm A');
 
-  // VACATION PROTECTION
   if (user.vacationUntil && Date.now() < user.vacationUntil) return;
-
   if (user.lastDate === today) return;
 
   const yesterday = now.clone().subtract(1, 'day').format('YYYY-MM-DD');
+
+  // track activity hour
+  user.lastActiveHour = now.hour();
+
+  // history
+  user.history.push(user.lastDate === yesterday);
+  if (user.history.length > 7) user.history.shift();
 
   let msg;
 
   if (!user.lastDate) {
     user.streak = 1;
     user.best = 1;
-    msg = `✨ New streak (1)\nCome back at ${tomorrowTime}`;
+    msg = '✨ New streak (1)';
   } else if (user.lastDate === yesterday) {
     user.streak++;
     if (user.streak > user.best) user.best = user.streak;
-    msg = `🔥 ${user.streak} day streak\nCome back at ${tomorrowTime}`;
+
+    // PERFECT WEEK
+    if (user.history.slice(-7).every(v => v)) {
+      msg = `🔥 ${user.streak} day streak\n🏆 Perfect Week!`;
+    } else {
+      msg = `🔥 ${user.streak} day streak`;
+    }
   } else {
     user.streak = 1;
-    msg = `💀 Reset (1)\nCome back at ${tomorrowTime}`;
+    msg = '💀 Reset (1)';
   }
 
   user.lastDate = today;
@@ -210,27 +274,46 @@ client.on('messageCreate', async (message) => {
   message.reply(msg);
 });
 
-// ===== DAILY REMINDER LOOP =====
+// ===== SMART REMINDER LOOP =====
 setInterval(async () => {
-  const now = Date.now();
-
   for (const id in data) {
+    if (id === '_config') continue;
+
     const user = data[id];
+    if (!user.timezone || !user.lastActiveHour) continue;
 
-    if (!user.timezone) continue;
-    if (user.vacationUntil && now < user.vacationUntil) continue;
+    const now = moment().tz(user.timezone);
+    const today = now.format('YYYY-MM-DD');
 
-    const userTime = moment().tz(user.timezone);
-    const today = userTime.format('YYYY-MM-DD');
+    if (user.lastDate === today) continue;
 
-    // If they haven’t talked today → remind at 8 PM
-    if (user.lastDate !== today && userTime.hour() === 20) {
+    // remind 2 hours before usual time
+    if (now.hour() === user.lastActiveHour - 2) {
       try {
-        const userObj = await client.users.fetch(id);
-        userObj.send('⚠️ Don’t lose your streak today!');
+        const u = await client.users.fetch(id);
+        u.send('⚠️ You’re about to lose your streak!');
       } catch {}
     }
   }
-}, 60000); // runs every minute
+}, 60000);
+
+// ===== NEAR LOSS WARNING (SERVER) =====
+setInterval(async () => {
+  for (const id in data) {
+    if (id === '_config') continue;
+
+    const user = data[id];
+    if (!user.timezone) continue;
+
+    const now = moment().tz(user.timezone);
+
+    if (now.hour() === 23 && user.lastDate !== now.format('YYYY-MM-DD')) {
+      try {
+        const u = await client.users.fetch(id);
+        u.send('🚨 LAST CHANCE: Talk now or lose your streak!');
+      } catch {}
+    }
+  }
+}, 60000);
 
 client.login(TOKEN);
