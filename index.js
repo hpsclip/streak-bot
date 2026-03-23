@@ -6,10 +6,14 @@ const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-// Load data
+// ===== DATA =====
 let data = {};
 if (fs.existsSync('data.json')) {
   data = JSON.parse(fs.readFileSync('data.json'));
@@ -19,10 +23,7 @@ function saveData() {
   fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
 }
 
-// Anti-spam cooldown
-let cooldown = {};
-
-// REGISTER COMMANDS
+// ===== COMMANDS =====
 const commands = [
   new SlashCommandBuilder()
     .setName('settz')
@@ -46,41 +47,29 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 (async () => {
   try {
-    await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
-      { body: commands }
-    );
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log('✅ Slash commands registered');
   } catch (err) {
     console.error(err);
   }
 })();
 
+// ===== READY =====
 client.on('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-client.on('interactionCreate', async interaction => {
+// ===== SLASH COMMANDS =====
+client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const id = interaction.user.id;
 
   if (!data[id]) {
-    data[id] = {
-      streak: 0,
-      lastDate: null,
-      timezone: null,
-      best: 0
-    };
+    data[id] = { streak: 0, lastDate: null, timezone: null, best: 0 };
   }
 
   const user = data[id];
-
-  // COOLDOWN (anti spam)
-  if (cooldown[id] && Date.now() - cooldown[id] < 5000) {
-    return interaction.reply({ content: '⏳ Slow down...', ephemeral: true });
-  }
-  cooldown[id] = Date.now();
 
   // SET TIMEZONE
   if (interaction.commandName === 'settz') {
@@ -108,7 +97,7 @@ client.on('interactionCreate', async interaction => {
         new EmbedBuilder()
           .setColor(0x00ff00)
           .setTitle('✅ Timezone Set')
-          .setDescription(`Set to **${tz}**`)
+          .setDescription(`Your timezone is now **${tz}**`)
       ]
     });
   }
@@ -121,8 +110,8 @@ client.on('interactionCreate', async interaction => {
           .setColor(0x0099ff)
           .setTitle('🔥 Your Streak')
           .addFields(
-            { name: 'Current', value: `${user.streak}`, inline: true },
-            { name: 'Best', value: `${user.best}`, inline: true }
+            { name: 'Current', value: `${user.streak} days`, inline: true },
+            { name: 'Best', value: `${user.best} days`, inline: true }
           )
       ]
     });
@@ -139,47 +128,77 @@ client.on('interactionCreate', async interaction => {
     for (let i = 0; i < sorted.length; i++) {
       const member = await interaction.guild.members.fetch(sorted[i][0]).catch(() => null);
       const name = member ? member.user.username : 'Unknown';
-      desc += `**${i + 1}.** ${name} — 🔥 ${sorted[i][1].streak}\n`;
+      desc += `**${i + 1}.** ${name} — 🔥 ${sorted[i][1].streak} days\n`;
     }
 
     return interaction.reply({
       embeds: [
         new EmbedBuilder()
           .setColor(0xffd700)
-          .setTitle('🏆 Leaderboard')
+          .setTitle('🏆 Top Streaks')
           .setDescription(desc || 'No data yet')
       ]
     });
   }
+});
 
-  // AUTO STREAK UPDATE
+// ===== MESSAGE TRACKING (CLEAN SYSTEM) =====
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (message.content.length < 3) return; // anti spam
+
+  const id = message.author.id;
+
+  if (!data[id]) {
+    data[id] = { streak: 0, lastDate: null, timezone: null, best: 0 };
+  }
+
+  const user = data[id];
+
   if (!user.timezone) return;
 
   const today = moment().tz(user.timezone).format('YYYY-MM-DD');
 
-  if (!user.lastDate) {
-    user.lastDate = today;
-    user.streak = 1;
-    user.best = 1;
-    saveData();
-    return;
-  }
+  // ONLY RUN ON FIRST MESSAGE OF THE DAY
+  if (user.lastDate === today) return;
 
   const yesterday = moment().tz(user.timezone).subtract(1, 'day').format('YYYY-MM-DD');
 
-  if (user.lastDate === today) return;
+  let embed;
 
-  if (user.lastDate === yesterday) {
+  if (!user.lastDate) {
+    user.streak = 1;
+    user.best = 1;
+
+    embed = new EmbedBuilder()
+      .setColor(0x00ff00)
+      .setTitle('✨ New Streak')
+      .setDescription('You started your streak (1 day)');
+  }
+  else if (user.lastDate === yesterday) {
     user.streak++;
+
     if (user.streak > user.best) user.best = user.streak;
-    user.lastDate = today;
-    saveData();
-    return;
+
+    embed = new EmbedBuilder()
+      .setColor(0x00ffcc)
+      .setTitle('🔥 Streak Continued')
+      .setDescription(`Now at **${user.streak} days**`);
+  }
+  else {
+    user.streak = 1;
+
+    embed = new EmbedBuilder()
+      .setColor(0xff0000)
+      .setTitle('💀 Streak Reset')
+      .setDescription('Missed a day. Back to **1**');
   }
 
-  user.streak = 1;
   user.lastDate = today;
   saveData();
+
+  // CLEAN: only reply once per day
+  message.reply({ embeds: [embed] });
 });
 
 client.login(TOKEN);
