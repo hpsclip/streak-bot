@@ -22,22 +22,13 @@ function saveData() {
   fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
 }
 
-// ===== RANK =====
-function getRank(streak) {
-  if (streak >= 25) return '🏆 No Life';
-  if (streak >= 10) return '🔥 Grinder';
-  if (streak >= 4) return '⚡ Active';
-  return '🌱 Beginner';
-}
-
-// ===== COMMANDS (100% SAFE) =====
+// ===== COMMANDS (SAFE) =====
 const commands = [
   new SlashCommandBuilder()
     .setName('settz')
     .setDescription('Set your timezone')
     .addStringOption(option =>
-      option
-        .setName('timezone')
+      option.setName('timezone')
         .setDescription('Example: America/New_York')
         .setRequired(true)
     ),
@@ -52,39 +43,32 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('vacation')
-    .setDescription('Pause your streak')
+    .setDescription('Pause your streak temporarily')
     .addIntegerOption(option =>
-      option
-        .setName('days')
+      option.setName('days')
         .setDescription('Number of days (max 7)')
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Show help menu'),
-
-  new SlashCommandBuilder()
-    .setName('stats')
-    .setDescription('View your stats'),
+    .setDescription('How to use the bot'),
 
   new SlashCommandBuilder()
     .setName('setupdateschannel')
-    .setDescription('Set updates channel')
+    .setDescription('Set updates channel (admin only)')
     .addChannelOption(option =>
-      option
-        .setName('channel')
-        .setDescription('Channel where updates will be sent')
+      option.setName('channel')
+        .setDescription('Channel for updates')
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName('update')
-    .setDescription('Send update message')
+    .setDescription('Send an update message (admin only)')
     .addStringOption(option =>
-      option
-        .setName('message')
-        .setDescription('Update details')
+      option.setName('message')
+        .setDescription('What was added/changed')
         .setRequired(true)
     )
 ];
@@ -94,10 +78,7 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 // REGISTER COMMANDS
 (async () => {
   try {
-    await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
-      { body: commands }
-    );
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log('✅ Commands registered');
   } catch (err) {
     console.error(err);
@@ -121,9 +102,7 @@ client.on('interactionCreate', async (interaction) => {
       best: 0,
       lastDate: null,
       timezone: null,
-      vacationUntil: null,
-      history: [],
-      lastActiveHour: null
+      vacationUntil: null
     };
   }
 
@@ -135,15 +114,17 @@ client.on('interactionCreate', async (interaction) => {
       embeds: [
         new EmbedBuilder()
           .setColor(0x5865f2)
-          .setTitle('📘 Help')
+          .setTitle('📘 Help Menu')
           .setDescription(
+            '**Commands:**\n' +
             '/settz – set timezone\n' +
-            '/streak – check streak\n' +
-            '/stats – stats\n' +
+            '/streak – view streak\n' +
             '/topstreaks – leaderboard\n' +
             '/vacation – pause streak\n\n' +
-            'Talk once daily to keep streak.\n\n' +
-            'Contact mods if bugs.'
+            '**How it works:**\n' +
+            'Talk once per day to keep your streak.\n\n' +
+            '**Support:**\n' +
+            'Contact mods if something is broken.'
           )
       ]
     });
@@ -165,37 +146,7 @@ client.on('interactionCreate', async (interaction) => {
 
   // STREAK
   if (interaction.commandName === 'streak') {
-    return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x0099ff)
-          .setTitle('🔥 Streak')
-          .addFields(
-            { name: 'Current', value: `${user.streak}`, inline: true },
-            { name: 'Best', value: `${user.best}`, inline: true },
-            { name: 'Rank', value: getRank(user.streak), inline: true }
-          )
-      ]
-    });
-  }
-
-  // STATS
-  if (interaction.commandName === 'stats') {
-    const hist = user.history.slice(-7).map(v => v ? '✅' : '❌').join(' ') || 'No data';
-
-    return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x00ccff)
-          .setTitle('📊 Stats')
-          .addFields(
-            { name: 'Current', value: `${user.streak}`, inline: true },
-            { name: 'Best', value: `${user.best}`, inline: true },
-            { name: 'Rank', value: getRank(user.streak), inline: true },
-            { name: 'Last 7 Days', value: hist }
-          )
-      ]
-    });
+    return interaction.reply(`🔥 Current: ${user.streak} | Best: ${user.best}`);
   }
 
   // LEADERBOARD
@@ -205,13 +156,11 @@ client.on('interactionCreate', async (interaction) => {
       .sort((a, b) => b[1].streak - a[1].streak)
       .slice(0, 10);
 
-    const desc = sorted.map((u, i) =>
-      `**${i + 1}.** <@${u[0]}> — 🔥 ${u[1].streak}`
+    const text = sorted.map((u, i) =>
+      `${i + 1}. <@${u[0]}> — ${u[1].streak}`
     ).join('\n') || 'No data';
 
-    return interaction.reply({
-      embeds: [new EmbedBuilder().setColor(0xffd700).setTitle('🏆 Leaderboard').setDescription(desc)]
-    });
+    return interaction.reply(text);
   }
 
   // VACATION
@@ -234,10 +183,10 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: 'Admin only', ephemeral: true });
     }
 
-    const ch = interaction.options.getChannel('channel');
+    const channel = interaction.options.getChannel('channel');
 
     data._config = data._config || {};
-    data._config.updatesChannel = ch.id;
+    data._config.updatesChannel = channel.id;
     saveData();
 
     return interaction.reply('✅ Updates channel set');
@@ -253,7 +202,7 @@ client.on('interactionCreate', async (interaction) => {
     const chId = data._config?.updatesChannel;
 
     if (!chId) {
-      return interaction.reply({ content: 'No updates channel set', ephemeral: true });
+      return interaction.reply({ content: '❌ No updates channel set', ephemeral: true });
     }
 
     const ch = await client.channels.fetch(chId);
@@ -262,7 +211,7 @@ client.on('interactionCreate', async (interaction) => {
       embeds: [
         new EmbedBuilder()
           .setColor(0x00ffcc)
-          .setTitle('🚀 Update')
+          .setTitle('🚀 New Update')
           .setDescription(msg)
           .setTimestamp()
       ]
@@ -290,11 +239,6 @@ client.on('messageCreate', (message) => {
 
   const yesterday = now.clone().subtract(1, 'day').format('YYYY-MM-DD');
 
-  user.lastActiveHour = now.hour();
-
-  user.history.push(user.lastDate === yesterday);
-  if (user.history.length > 7) user.history.shift();
-
   if (!user.lastDate) {
     user.streak = 1;
     user.best = 1;
@@ -307,6 +251,8 @@ client.on('messageCreate', (message) => {
 
   user.lastDate = today;
   saveData();
+
+  message.reply(`🔥 Streak: ${user.streak}`);
 });
 
 client.login(TOKEN);
