@@ -4,6 +4,7 @@ const fs = require('fs');
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID; // 👈 ADD THIS IN RAILWAY
 
 const client = new Client({
   intents: [
@@ -22,67 +23,53 @@ function saveData() {
   fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
 }
 
-// ===== COMMANDS (SAFE) =====
+// ===== RANK =====
+function getRank(streak) {
+  if (streak >= 50) return '👑 Legend';
+  if (streak >= 25) return '🏆 Pro';
+  if (streak >= 10) return '🔥 Grinder';
+  if (streak >= 5) return '⚡ Active';
+  return '🌱 Beginner';
+}
+
+// ===== COMMANDS =====
 const commands = [
-  new SlashCommandBuilder()
-    .setName('settz')
-    .setDescription('Set your timezone')
-    .addStringOption(option =>
-      option.setName('timezone')
-        .setDescription('Example: America/New_York')
-        .setRequired(true)
-    ),
+  new SlashCommandBuilder().setName('settz').setDescription('Set timezone')
+    .addStringOption(o => o.setName('timezone').setDescription('America/New_York').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('streak')
-    .setDescription('Check your streak'),
+  new SlashCommandBuilder().setName('streak').setDescription('Check streak'),
 
-  new SlashCommandBuilder()
-    .setName('topstreaks')
-    .setDescription('View leaderboard'),
+  new SlashCommandBuilder().setName('topstreaks').setDescription('Leaderboard'),
 
-  new SlashCommandBuilder()
-    .setName('vacation')
-    .setDescription('Pause your streak temporarily')
-    .addIntegerOption(option =>
-      option.setName('days')
-        .setDescription('Number of days (max 7)')
-        .setRequired(true)
-    ),
+  new SlashCommandBuilder().setName('vacation').setDescription('Pause streak')
+    .addIntegerOption(o => o.setName('days').setDescription('Days').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('help')
-    .setDescription('How to use the bot'),
+  new SlashCommandBuilder().setName('help').setDescription('Help menu'),
 
-  new SlashCommandBuilder()
-    .setName('setupdateschannel')
-    .setDescription('Set updates channel (admin only)')
-    .addChannelOption(option =>
-      option.setName('channel')
-        .setDescription('Channel for updates')
-        .setRequired(true)
-    ),
+  new SlashCommandBuilder().setName('resetstreak').setDescription('Admin reset')
+    .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
 
-  new SlashCommandBuilder()
-    .setName('update')
-    .setDescription('Send an update message (admin only)')
-    .addStringOption(option =>
-      option.setName('message')
-        .setDescription('What was added/changed')
-        .setRequired(true)
-    )
+  new SlashCommandBuilder().setName('setstreak').setDescription('Admin set streak')
+    .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+    .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
+
+  new SlashCommandBuilder().setName('setupdateschannel').setDescription('Set update channel')
+    .addChannelOption(o => o.setName('channel').setDescription('Channel').setRequired(true)),
+
+  new SlashCommandBuilder().setName('update').setDescription('Send update')
+    .addStringOption(o => o.setName('message').setDescription('Message').setRequired(true))
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-// REGISTER COMMANDS
+// ===== REGISTER (INSTANT) =====
 (async () => {
-  try {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-    console.log('✅ Commands registered');
-  } catch (err) {
-    console.error(err);
-  }
+  console.log("REGISTERING COMMANDS...");
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
+  console.log("✅ Commands registered instantly");
 })();
 
 // ===== READY =====
@@ -90,11 +77,11 @@ client.on('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ===== SLASH COMMANDS =====
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+// ===== SLASH =====
+client.on('interactionCreate', async (i) => {
+  if (!i.isChatInputCommand()) return;
 
-  const id = interaction.user.id;
+  const id = i.user.id;
 
   if (!data[id]) {
     data[id] = {
@@ -102,57 +89,40 @@ client.on('interactionCreate', async (interaction) => {
       best: 0,
       lastDate: null,
       timezone: null,
-      vacationUntil: null
+      vacationUntil: null,
+      achievements: []
     };
   }
 
   const user = data[id];
 
   // HELP
-  if (interaction.commandName === 'help') {
-    return interaction.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x5865f2)
-          .setTitle('📘 Help Menu')
-          .setDescription(
-            '**Commands:**\n' +
-            '/settz – set timezone\n' +
-            '/streak – view streak\n' +
-            '/topstreaks – leaderboard\n' +
-            '/vacation – pause streak\n\n' +
-            '**How it works:**\n' +
-            'Talk once per day to keep your streak.\n\n' +
-            '**Support:**\n' +
-            'Contact mods if something is broken.'
-          )
-      ]
-    });
+  if (i.commandName === 'help') {
+    return i.reply("Use /settz → then talk daily to build streak");
   }
 
   // SET TZ
-  if (interaction.commandName === 'settz') {
-    const tz = interaction.options.getString('timezone');
+  if (i.commandName === 'settz') {
+    const tz = i.options.getString('timezone');
 
     if (!moment.tz.zone(tz)) {
-      return interaction.reply({ content: '❌ Invalid timezone', ephemeral: true });
+      return i.reply({ content: 'Invalid timezone', ephemeral: true });
     }
 
     user.timezone = tz;
     saveData();
 
-    return interaction.reply(`✅ Timezone set to ${tz}`);
+    return i.reply(`Timezone set to ${tz}`);
   }
 
   // STREAK
-  if (interaction.commandName === 'streak') {
-    return interaction.reply(`🔥 Current: ${user.streak} | Best: ${user.best}`);
+  if (i.commandName === 'streak') {
+    return i.reply(`🔥 ${user.streak} | Best: ${user.best} | ${getRank(user.streak)}`);
   }
 
-  // LEADERBOARD
-  if (interaction.commandName === 'topstreaks') {
+  // TOP
+  if (i.commandName === 'topstreaks') {
     const sorted = Object.entries(data)
-      .filter(([k]) => k !== '_config')
       .sort((a, b) => b[1].streak - a[1].streak)
       .slice(0, 10);
 
@@ -160,96 +130,113 @@ client.on('interactionCreate', async (interaction) => {
       `${i + 1}. <@${u[0]}> — ${u[1].streak}`
     ).join('\n') || 'No data';
 
-    return interaction.reply(text);
+    return i.reply(text);
   }
 
   // VACATION
-  if (interaction.commandName === 'vacation') {
-    const days = interaction.options.getInteger('days');
-
-    if (days > 7) {
-      return interaction.reply({ content: 'Max 7 days', ephemeral: true });
-    }
-
+  if (i.commandName === 'vacation') {
+    const days = i.options.getInteger('days');
     user.vacationUntil = moment().add(days, 'days').valueOf();
     saveData();
-
-    return interaction.reply(`✈️ Vacation for ${days} days`);
+    return i.reply(`Vacation for ${days} days`);
   }
 
-  // SET UPDATE CHANNEL
-  if (interaction.commandName === 'setupdateschannel') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.reply({ content: 'Admin only', ephemeral: true });
-    }
+  // ADMIN CHECK
+  const isAdmin = i.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    const channel = interaction.options.getChannel('channel');
+  if (i.commandName === 'resetstreak') {
+    if (!isAdmin) return i.reply({ content: 'Admin only', ephemeral: true });
 
-    data._config = data._config || {};
-    data._config.updatesChannel = channel.id;
+    const u = i.options.getUser('user');
+    if (data[u.id]) data[u.id].streak = 0;
     saveData();
 
-    return interaction.reply('✅ Updates channel set!');
+    return i.reply('Reset done');
   }
 
-  // SEND UPDATE
-  if (interaction.commandName === 'update') {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.reply({ content: 'Admin only', ephemeral: true });
-    }
+  if (i.commandName === 'setstreak') {
+    if (!isAdmin) return i.reply({ content: 'Admin only', ephemeral: true });
 
-    const msg = interaction.options.getString('message');
-    const chId = data._config?.updatesChannel;
+    const u = i.options.getUser('user');
+    const amount = i.options.getInteger('amount');
 
-    if (!chId) {
-      return interaction.reply({ content: '❌ No updates channel set', ephemeral: true });
-    }
+    if (!data[u.id]) data[u.id] = {};
+    data[u.id].streak = amount;
 
-    const ch = await client.channels.fetch(chId);
+    saveData();
+    return i.reply('Set done');
+  }
 
-    await ch.send({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x00ffcc)
-          .setTitle('🚀 New Update')
-          .setDescription(msg)
-          .setTimestamp()
-      ]
-    });
+  if (i.commandName === 'setupdateschannel') {
+    if (!isAdmin) return i.reply({ content: 'Admin only', ephemeral: true });
 
-    return interaction.reply({ content: '✅ Update sent', ephemeral: true });
+    data._config = data._config || {};
+    data._config.channel = i.options.getChannel('channel').id;
+
+    saveData();
+    return i.reply('Channel set');
+  }
+
+  if (i.commandName === 'update') {
+    if (!isAdmin) return i.reply({ content: 'Admin only', ephemeral: true });
+
+    const ch = await client.channels.fetch(data._config?.channel);
+    if (!ch) return i.reply('No channel set');
+
+    await ch.send(`🚀 Update: ${i.options.getString('message')}`);
+    return i.reply('Sent');
   }
 });
 
-// ===== MESSAGE TRACKING =====
+// ===== MESSAGE SYSTEM (FIXED) =====
 client.on('messageCreate', (message) => {
   if (message.author.bot) return;
-  if (message.content.length < 3) return;
+
+  console.log("MESSAGE:", message.content);
 
   const id = message.author.id;
+
+  if (!data[id]) {
+    data[id] = {
+      streak: 0,
+      best: 0,
+      lastDate: null,
+      timezone: null,
+      vacationUntil: null,
+      achievements: []
+    };
+  }
+
   const user = data[id];
 
-  if (!user || !user.timezone) return;
+  if (!user.timezone) {
+    message.reply("⚠️ Use /settz first");
+    return;
+  }
 
   const now = moment().tz(user.timezone);
   const today = now.format('YYYY-MM-DD');
 
-  if (user.vacationUntil && Date.now() < user.vacationUntil) return;
   if (user.lastDate === today) return;
 
   const yesterday = now.clone().subtract(1, 'day').format('YYYY-MM-DD');
 
   if (!user.lastDate) {
     user.streak = 1;
-    user.best = 1;
   } else if (user.lastDate === yesterday) {
     user.streak++;
-    if (user.streak > user.best) user.best = user.streak;
   } else {
     user.streak = 1;
   }
 
   user.lastDate = today;
+
+  // ACHIEVEMENT
+  if (user.streak === 7 && !user.achievements.includes('7')) {
+    user.achievements.push('7');
+    message.reply("🏆 7 Day Streak!");
+  }
+
   saveData();
 
   message.reply(`🔥 Streak: ${user.streak}`);
