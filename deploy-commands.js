@@ -6,9 +6,10 @@ const GUILD_ID = process.env.GUILD_ID;
 
 const commands = [
   new SlashCommandBuilder().setName('streak').setDescription('Check streak'),
-  new SlashCommandBuilder().setName('rank').setDescription('Rank card'),
+  new SlashCommandBuilder().setName('profile').setDescription('Your stats'),
   new SlashCommandBuilder().setName('daily').setDescription('Daily reward'),
   new SlashCommandBuilder().setName('shop').setDescription('Shop'),
+  new SlashCommandBuilder().setName('leaderboard').setDescription('Top players'),
   new SlashCommandBuilder()
     .setName('buy')
     .setDescription('Buy item')

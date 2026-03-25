@@ -11,9 +11,9 @@ const TOKEN = process.env.TOKEN;
 
 const COLORS = {
   primary: 0x22c55e,
-  warning: 0xffaa00,
+  gold: 0xffcc00,
   error: 0xff4444,
-  gold: 0xffcc00
+  warn: 0xffaa00
 };
 
 const client = new Client({
@@ -26,12 +26,8 @@ const client = new Client({
 
 // ===== DATA =====
 let data = {};
-try {
-  if (fs.existsSync('data.json')) {
-    data = JSON.parse(fs.readFileSync('data.json'));
-  }
-} catch {
-  data = {};
+if (fs.existsSync('data.json')) {
+  data = JSON.parse(fs.readFileSync('data.json'));
 }
 
 function save() {
@@ -66,7 +62,7 @@ function getRank(streak) {
 
 // ===== READY =====
 client.on('clientReady', () => {
-  console.log(`✅ ${client.user.tag} is online`);
+  console.log(`✅ ${client.user.tag} online`);
 });
 
 // ===== COMMAND HANDLER =====
@@ -75,130 +71,125 @@ client.on('interactionCreate', async (i) => {
 
   const user = getUser(i.user.id);
 
-  // ===== STREAK =====
-  if (i.commandName === 'streak') {
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.primary)
-          .setTitle("🔥 Streak Overview")
-          .setDescription(
-            `**Current:** ${user.streak}\n**Best:** ${user.best}\n**Fails:** ${user.fails}/3`
-          )
-      ]
-    });
-  }
+  try {
+    await i.deferReply();
 
-  // ===== DAILY =====
-  if (i.commandName === 'daily') {
-    const now = Date.now();
-
-    if (now - user.lastDaily < 86400000) {
-      return i.reply({
+    // ===== STREAK =====
+    if (i.commandName === 'streak') {
+      return i.editReply({
         embeds: [
           new EmbedBuilder()
-            .setColor(COLORS.warning)
-            .setDescription("⏳ You already claimed your daily reward.")
-        ],
-        ephemeral: true
-      });
-    }
-
-    const reward = 10 + user.streak * 2;
-    user.coins += reward;
-    user.lastDaily = now;
-
-    save();
-
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.gold)
-          .setTitle("💰 Daily Reward")
-          .setDescription(`You earned **${reward} coins**\nTotal: **${user.coins}**`)
-      ]
-    });
-  }
-
-  // ===== RANK =====
-  if (i.commandName === 'rank') {
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.primary)
-          .setTitle(`${i.user.username}'s Profile`)
-          .addFields(
-            { name: "Rank", value: getRank(user.streak), inline: true },
-            { name: "Streak", value: `${user.streak}`, inline: true },
-            { name: "Coins", value: `${user.coins}`, inline: true },
-            { name: "Shields", value: `${user.shields}`, inline: true }
-          )
-      ]
-    });
-  }
-
-  // ===== SHOP =====
-  if (i.commandName === 'shop') {
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.gold)
-          .setTitle("🛒 Shop")
-          .setDescription(
-            "**shield** — 100 coins\nPrevents streak loss once"
-          )
-      ]
-    });
-  }
-
-  // ===== BUY =====
-  if (i.commandName === 'buy') {
-    const item = i.options.getString('item');
-
-    if (item !== "shield") {
-      return i.reply({ content: "❌ Invalid item", ephemeral: true });
-    }
-
-    if (user.coins < 100) {
-      return i.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(COLORS.error)
-            .setDescription("❌ Not enough coins")
+            .setColor(COLORS.primary)
+            .setTitle("🔥 Streak")
+            .setDescription(
+              `Current: **${user.streak}**\nBest: **${user.best}**\nFails: **${user.fails}/3**`
+            )
         ]
       });
     }
 
-    user.coins -= 100;
-    user.shields++;
+    // ===== PROFILE =====
+    if (i.commandName === 'profile') {
+      return i.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(COLORS.primary)
+            .setTitle(`${i.user.username}'s Profile`)
+            .addFields(
+              { name: "Rank", value: getRank(user.streak), inline: true },
+              { name: "Streak", value: `${user.streak}`, inline: true },
+              { name: "Best", value: `${user.best}`, inline: true },
+              { name: "Coins", value: `${user.coins}`, inline: true },
+              { name: "Shields", value: `${user.shields}`, inline: true }
+            )
+        ]
+      });
+    }
 
-    save();
+    // ===== DAILY =====
+    if (i.commandName === 'daily') {
+      const now = Date.now();
 
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.primary)
-          .setDescription("🛡️ Shield purchased successfully")
-      ]
-    });
-  }
+      if (now - user.lastDaily < 86400000) {
+        return i.editReply("⏳ Already claimed today");
+      }
 
-  // ===== REMINDER =====
-  if (i.commandName === 'remind') {
-    const hours = i.options.getInteger('hours');
+      const reward = 10 + user.streak * 2;
 
-    setTimeout(() => {
-      i.user.send("⏰ Reminder: Stay active to keep your streak!")
-        .catch(() => {});
-    }, hours * 3600000);
+      user.coins += reward;
+      user.lastDaily = now;
 
-    return i.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(COLORS.primary)
-          .setDescription(`⏰ Reminder set for ${hours} hour(s)`)
-      ]
-    });
+      save();
+
+      return i.editReply(`💰 You got **${reward} coins**`);
+    }
+
+    // ===== SHOP =====
+    if (i.commandName === 'shop') {
+      return i.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(COLORS.gold)
+            .setTitle("🛒 Shop")
+            .setDescription("shield — 100 coins\nPrevents streak loss once")
+        ]
+      });
+    }
+
+    // ===== BUY =====
+    if (i.commandName === 'buy') {
+      const item = i.options.getString('item');
+
+      if (item !== "shield") {
+        return i.editReply("❌ Invalid item");
+      }
+
+      if (user.coins < 100) {
+        return i.editReply("❌ Not enough coins");
+      }
+
+      user.coins -= 100;
+      user.shields++;
+
+      save();
+
+      return i.editReply("🛡️ Shield purchased");
+    }
+
+    // ===== LEADERBOARD =====
+    if (i.commandName === 'leaderboard') {
+      const top = Object.entries(data)
+        .sort((a, b) => b[1].streak - a[1].streak)
+        .slice(0, 10);
+
+      const text = top
+        .map((u, i) => `#${i + 1} <@${u[0]}> — ${u[1].streak}`)
+        .join("\n");
+
+      return i.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(COLORS.gold)
+            .setTitle("🏆 Leaderboard")
+            .setDescription(text || "No data")
+        ]
+      });
+    }
+
+    // ===== REMINDER =====
+    if (i.commandName === 'remind') {
+      const hours = i.options.getInteger('hours');
+
+      setTimeout(() => {
+        i.user.send("⏰ Reminder to keep your streak!").catch(() => {});
+      }, hours * 3600000);
+
+      return i.editReply(`⏰ Reminder set for ${hours} hour(s)`);
+    }
+
+  } catch (err) {
+    console.error(err);
+    if (i.deferred) i.editReply("❌ Error occurred");
   }
 });
 
@@ -208,7 +199,7 @@ client.on('messageCreate', (msg) => {
 
   const user = getUser(msg.author.id);
 
-  // Anti spam (5 sec cooldown)
+  // anti spam
   if (Date.now() - user.lastMessage < 5000) return;
   user.lastMessage = Date.now();
 
