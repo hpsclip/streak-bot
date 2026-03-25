@@ -1,13 +1,11 @@
 const {
   Client,
   GatewayIntentBits,
-  EmbedBuilder,
-  AttachmentBuilder
+  EmbedBuilder
 } = require('discord.js');
 
 const moment = require('moment-timezone');
 const fs = require('fs');
-const { createCanvas } = require('canvas');
 
 const TOKEN = process.env.TOKEN;
 
@@ -47,32 +45,11 @@ function getUser(id) {
 
 // ===== RANK =====
 function getRank(streak) {
-  if (streak >= 50) return "Legend";
-  if (streak >= 25) return "Pro";
-  if (streak >= 10) return "Grinder";
-  if (streak >= 5) return "Active";
-  return "Beginner";
-}
-
-// ===== RANK CARD IMAGE =====
-function generateRankCard(user, username) {
-  const canvas = createCanvas(600, 200);
-  const ctx = canvas.getContext('2d');
-
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(0, 0, 600, 200);
-
-  ctx.fillStyle = "#22c55e";
-  ctx.font = "28px sans-serif";
-  ctx.fillText(username, 20, 40);
-
-  ctx.font = "20px sans-serif";
-  ctx.fillText(`Rank: ${getRank(user.streak)}`, 20, 90);
-  ctx.fillText(`Streak: ${user.streak}`, 20, 120);
-  ctx.fillText(`Coins: ${user.coins}`, 20, 150);
-  ctx.fillText(`Shields: ${user.shields}`, 20, 180);
-
-  return canvas.toBuffer();
+  if (streak >= 50) return "👑 Legend";
+  if (streak >= 25) return "🏆 Pro";
+  if (streak >= 10) return "🔥 Grinder";
+  if (streak >= 5) return "⚡ Active";
+  return "🌱 Beginner";
 }
 
 // ===== READY =====
@@ -80,75 +57,99 @@ client.on('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ===== SLASH =====
+// ===== SLASH COMMANDS =====
 client.on('interactionCreate', async (i) => {
   if (!i.isChatInputCommand()) return;
 
   const user = getUser(i.user.id);
 
-  // STREAK
+  // ===== STREAK =====
   if (i.commandName === 'streak') {
     return i.reply({
       embeds: [
         new EmbedBuilder()
           .setTitle("🔥 Streak")
-          .setDescription(`Current: ${user.streak}\nBest: ${user.best}\nFails: ${user.fails}/3`)
+          .setColor(0x22c55e)
+          .setDescription(
+            `Current: ${user.streak}\nBest: ${user.best}\nFails: ${user.fails}/3`
+          )
       ]
     });
   }
 
-  // DAILY
+  // ===== DAILY =====
   if (i.commandName === 'daily') {
     const now = Date.now();
 
     if (now - user.lastDaily < 86400000) {
-      return i.reply({ content: "⏳ Already claimed", ephemeral: true });
+      return i.reply({ content: "⏳ Already claimed today", ephemeral: true });
     }
 
     const reward = 10 + user.streak * 2;
+
     user.coins += reward;
     user.lastDaily = now;
 
     save();
 
-    return i.reply(`💰 +${reward} coins`);
+    return i.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("💰 Daily Reward")
+          .setColor(0x00ffaa)
+          .setDescription(`+${reward} coins\nTotal: ${user.coins}`)
+      ]
+    });
   }
 
-  // RANK CARD
+  // ===== RANK =====
   if (i.commandName === 'rank') {
-    const buffer = generateRankCard(user, i.user.username);
-    const file = new AttachmentBuilder(buffer, { name: 'rank.png' });
-
-    return i.reply({ files: [file] });
+    return i.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`${i.user.username}'s Rank`)
+          .setColor(0x22c55e)
+          .addFields(
+            { name: "Rank", value: getRank(user.streak), inline: true },
+            { name: "Streak", value: String(user.streak), inline: true },
+            { name: "Coins", value: String(user.coins), inline: true },
+            { name: "Shields", value: String(user.shields), inline: true }
+          )
+      ]
+    });
   }
 
-  // SHOP
+  // ===== SHOP =====
   if (i.commandName === 'shop') {
     return i.reply({
       embeds: [
         new EmbedBuilder()
           .setTitle("🛒 Shop")
-          .setDescription("shield = 100 coins (prevents streak loss once)")
+          .setColor(0xffcc00)
+          .setDescription("shield = 100 coins\n(Prevents streak loss once)")
       ]
     });
   }
 
-  // BUY
+  // ===== BUY =====
   if (i.commandName === 'buy') {
     const item = i.options.getString('item');
 
     if (item === "shield") {
-      if (user.coins < 100) return i.reply("Not enough coins");
+      if (user.coins < 100) {
+        return i.reply("❌ Not enough coins");
+      }
 
       user.coins -= 100;
       user.shields += 1;
+
       save();
 
-      return i.reply("🛡️ Bought shield");
+      return i.reply("🛡️ Shield purchased");
     }
   }
 
-  // REMINDER
+  // ===== REMINDER =====
   if (i.commandName === 'remind') {
     const hours = i.options.getInteger('hours');
 
@@ -156,7 +157,7 @@ client.on('interactionCreate', async (i) => {
       i.user.send("⏰ Reminder!");
     }, hours * 3600000);
 
-    return i.reply("Reminder set");
+    return i.reply("⏰ Reminder set");
   }
 });
 
@@ -195,7 +196,10 @@ client.on('messageCreate', (msg) => {
   }
 
   user.lastDate = today;
-  if (user.streak > user.best) user.best = user.streak;
+
+  if (user.streak > user.best) {
+    user.best = user.streak;
+  }
 
   save();
 });
