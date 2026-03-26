@@ -1,34 +1,32 @@
 const {
   Client,
   GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle,
-  AttachmentBuilder
+  ButtonStyle
 } = require('discord.js');
 
 const express = require('express');
 const fs = require('fs');
-const { createCanvas } = require('canvas');
 
+// ===== WEB =====
 const app = express();
-
-// ===== WEB DASHBOARD =====
-app.get('/', (req, res) => {
-  res.send("Bot is running ✅");
-});
-
-app.listen(3000, () => console.log("Web panel running"));
+app.get('/', (req, res) => res.send("Bot running ✅"));
+app.listen(3000, () => console.log("Web online"));
 
 // ===== DISCORD =====
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent]
 });
 
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+
+// ===== DATA =====
 let data = {};
 if (fs.existsSync('data.json')) {
   data = JSON.parse(fs.readFileSync('data.json'));
@@ -47,10 +45,31 @@ function getUser(id) {
       inventory: [],
       wins: 0,
       losses: 0,
-      lastXp: 0
+      lastXp: 0,
+      achievements: []
     };
   }
   return data[id];
+}
+
+// ===== SYSTEMS =====
+function xpNeeded(level) {
+  return 50 + level * 30;
+}
+
+// ===== ACHIEVEMENTS =====
+const achievements = {
+  level5: u => u.level >= 5,
+  rich: u => u.coins >= 200,
+  winner: u => u.wins >= 3
+};
+
+function checkAchievements(user) {
+  for (let key in achievements) {
+    if (!user.achievements.includes(key) && achievements[key](user)) {
+      user.achievements.push(key);
+    }
+  }
 }
 
 // ===== MATCHMAKING =====
@@ -60,7 +79,6 @@ function matchPlayers() {
   if (queue.length >= 2) {
     const p1 = queue.shift();
     const p2 = queue.shift();
-
     startFight(p1, p2);
   }
 }
@@ -72,7 +90,7 @@ async function startFight(p1, p2) {
   let p1Power = u1.level + (u1.inventory.includes("sword") ? 5 : 0);
   let p2Power = u2.level + (u2.inventory.includes("sword") ? 5 : 0);
 
-  let winner = p1Power > p2Power ? p1 : p2;
+  let winner = p1Power >= p2Power ? p1 : p2;
   let loser = winner === p1 ? p2 : p1;
 
   getUser(winner.id).wins++;
@@ -80,91 +98,146 @@ async function startFight(p1, p2) {
 
   save();
 
-  p1.send(`⚔️ Match result: ${winner.username} won`);
-  p2.send(`⚔️ Match result: ${winner.username} won`);
+  try {
+    await p1.send(`⚔️ Match result: ${winner.username} won`);
+    await p2.send(`⚔️ Match result: ${winner.username} won`);
+  } catch {}
 }
 
-// ===== RANK CARD =====
-function rankCard(user, name) {
-  const canvas = createCanvas(600, 200);
-  const ctx = canvas.getContext('2d');
+// ===== DEPLOY COMMANDS =====
+async function deployCommands() {
+  const commands = [
+    new SlashCommandBuilder().setName('profile').setDescription('View profile'),
+    new SlashCommandBuilder().setName('queue').setDescription('Join matchmaking'),
+    new SlashCommandBuilder().setName('shop').setDescription('Open shop'),
+    new SlashCommandBuilder().setName('daily').setDescription('Daily coins')
+  ];
 
-  ctx.fillStyle = "#111";
-  ctx.fillRect(0, 0, 600, 200);
+  const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-  ctx.fillStyle = "#0f0";
-  ctx.fillText(name, 20, 40);
-  ctx.fillText(`Level: ${user.level}`, 20, 80);
-  ctx.fillText(`XP: ${user.xp}`, 20, 110);
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
 
-  return canvas.toBuffer();
+  console.log("✅ Slash commands deployed");
 }
 
 // ===== READY =====
-client.on('ready', () => {
-  console.log("Bot ready");
+client.on('ready', async () => {
+  console.log(`✅ ${client.user.tag} online`);
+  await deployCommands();
 });
 
-// ===== COMMANDS =====
-client.on('messageCreate', async (msg) => {
+// ===== SLASH COMMAND HANDLER =====
+client.on('interactionCreate', async (i) => {
+  if (i.isChatInputCommand()) {
+    const user = getUser(i.user.id);
+
+    if (i.commandName === "profile") {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('stats').setLabel('Stats').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('inventory').setLabel('Inventory').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('achievements').setLabel('Achievements').setStyle(ButtonStyle.Success)
+      );
+
+      return i.reply({
+        content:
+`Level: ${user.level}
+XP: ${user.xp}/${xpNeeded(user.level)}
+Coins: ${user.coins}
+Wins: ${user.wins} | Losses: ${user.losses}`,
+        components: [row]
+      });
+    }
+
+    if (i.commandName === "queue") {
+      if (!queue.find(p => p.id === i.user.id)) {
+        queue.push(i.user);
+        i.reply("✅ Added to queue");
+      } else {
+        i.reply("⚠️ Already queued");
+      }
+
+      matchPlayers();
+    }
+
+    if (i.commandName === "shop") {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
+      );
+
+      i.reply({ content: "🛒 Shop:", components: [row] });
+    }
+
+    if (i.commandName === "daily") {
+      user.coins += 50;
+      save();
+      i.reply("💰 +50 coins");
+    }
+  }
+
+  // ===== BUTTONS =====
+  if (i.isButton()) {
+    const user = getUser(i.user.id);
+
+    if (i.customId === "buy_sword") {
+      if (user.coins < 100)
+        return i.reply({ content: "❌ Not enough", ephemeral: true });
+
+      user.coins -= 100;
+      user.inventory.push("sword");
+      save();
+
+      return i.reply({ content: "🗡️ Bought", ephemeral: true });
+    }
+
+    if (i.customId === "inventory") {
+      return i.reply({
+        content: user.inventory.join(", ") || "Empty",
+        ephemeral: true
+      });
+    }
+
+    if (i.customId === "achievements") {
+      return i.reply({
+        content: user.achievements.join(", ") || "None",
+        ephemeral: true
+      });
+    }
+
+    if (i.customId === "stats") {
+      return i.reply({
+        content:
+`Level: ${user.level}
+XP: ${user.xp}
+Wins: ${user.wins}
+Losses: ${user.losses}`,
+        ephemeral: true
+      });
+    }
+  }
+});
+
+// ===== XP SYSTEM =====
+client.on('messageCreate', (msg) => {
   if (msg.author.bot) return;
 
   const user = getUser(msg.author.id);
   const now = Date.now();
 
-  // XP SYSTEM
-  if (now - user.lastXp > 60000) {
+  if (!user.lastXp || now - user.lastXp > 60000) {
     user.xp += 10;
     user.lastXp = now;
 
-    if (user.xp >= 100) {
-      user.level++;
+    if (user.xp >= xpNeeded(user.level)) {
       user.xp = 0;
+      user.level++;
     }
-  }
 
-  // COMMANDS (TEXT → YOU CAN SWITCH TO SLASH LATER)
-  if (msg.content === "!profile") {
-    return msg.reply(`Level: ${user.level}\nCoins: ${user.coins}`);
-  }
-
-  if (msg.content === "!rank") {
-    const img = rankCard(user, msg.author.username);
-    return msg.reply({ files: [new AttachmentBuilder(img)] });
-  }
-
-  if (msg.content === "!queue") {
-    if (!queue.find(p => p.id === msg.author.id)) {
-      queue.push(msg.author);
-      msg.reply("✅ Added to matchmaking queue");
-    }
-    matchPlayers();
-  }
-
-  if (msg.content === "!shop") {
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
-    );
-
-    msg.reply({ content: "Shop:", components: [row] });
-  }
-});
-
-// ===== BUTTONS =====
-client.on('interactionCreate', async (i) => {
-  if (!i.isButton()) return;
-
-  const user = getUser(i.user.id);
-
-  if (i.customId === "buy_sword") {
-    if (user.coins < 100) return i.reply({ content: "❌ Not enough", ephemeral: true });
-
-    user.coins -= 100;
-    user.inventory.push("sword");
+    checkAchievements(user);
     save();
-
-    return i.reply({ content: "🗡️ Sword bought", ephemeral: true });
   }
 });
 
-client.login(process.env.TOKEN);
+client.login(TOKEN);
