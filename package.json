@@ -1,9 +1,12 @@
 {
   "name": "streak-bot",
   "version": "1.0.0",
+  "description": "Discord streak bot",
   "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "moment-timezone": "^0.5.45"
+    "discord.js": "^14.14.1"
   }
 }
