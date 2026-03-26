@@ -38,6 +38,11 @@ function save() {
   fs.writeFileSync('data.json', JSON.stringify(data, null, 2));
 }
 
+function autoDetectTZ() {
+  // simple default (can’t truly detect Discord user TZ without external API)
+  return "America/New_York";
+}
+
 function getUser(id) {
   if (!data[id]) {
     data[id] = {
@@ -48,24 +53,26 @@ function getUser(id) {
       wins: 0,
       losses: 0,
       lastXp: 0,
-      timezone: "UTC"
+      timezone: autoDetectTZ(),
+      streak: 0,
+      best: 0,
+      lastStreak: 0
     };
   }
   return data[id];
 }
 
-// ===== TIME =====
+// ===== HELPERS =====
+function xpNeeded(level) {
+  return 50 + level * 30;
+}
+
 function getLocalTime(tz) {
   try {
     return new Date().toLocaleString("en-US", { timeZone: tz });
   } catch {
-    return "Invalid timezone";
+    return "Invalid TZ";
   }
-}
-
-// ===== XP =====
-function xpNeeded(level) {
-  return 50 + level * 30;
 }
 
 // ===== MATCHMAKING =====
@@ -100,86 +107,40 @@ async function startFight(p1, p2) {
   } catch {}
 }
 
-// ===== DEPLOY COMMANDS =====
+// ===== COMMANDS =====
 async function deployCommands() {
   const commands = [
 
-    new SlashCommandBuilder()
-      .setName('profile')
-      .setDescription('View profile'),
+    new SlashCommandBuilder().setName('profile').setDescription('Profile'),
+    new SlashCommandBuilder().setName('streak').setDescription('Streak'),
+    new SlashCommandBuilder().setName('queue').setDescription('Matchmaking'),
+    new SlashCommandBuilder().setName('shop').setDescription('Shop'),
+    new SlashCommandBuilder().setName('daily').setDescription('Daily coins'),
+    new SlashCommandBuilder().setName('leaderboard').setDescription('Leaderboard'),
+    new SlashCommandBuilder().setName('inventory').setDescription('Inventory'),
 
-    new SlashCommandBuilder()
-      .setName('queue')
-      .setDescription('Join matchmaking'),
-
-    new SlashCommandBuilder()
-      .setName('shop')
-      .setDescription('Open shop'),
-
-    new SlashCommandBuilder()
-      .setName('daily')
-      .setDescription('Daily coins'),
-
-    new SlashCommandBuilder()
-      .setName('leaderboard')
-      .setDescription('Top players'),
-
-    new SlashCommandBuilder()
-      .setName('inventory')
-      .setDescription('View inventory'),
-
-    // ===== TIMEZONE =====
     new SlashCommandBuilder()
       .setName('settz')
-      .setDescription('Set your timezone')
-      .addStringOption(o =>
-        o.setName('zone')
-         .setDescription('Example: America/New_York')
-         .setRequired(true)
-      ),
+      .setDescription('Set timezone (buttons)'),
 
-    // ===== ADMIN =====
+    // ADMIN
     new SlashCommandBuilder()
       .setName('addcoins')
-      .setDescription('Admin only')
-      .addUserOption(o =>
-        o.setName('user')
-         .setDescription('Target')
-         .setRequired(true)
-      )
-      .addIntegerOption(o =>
-        o.setName('amount')
-         .setDescription('Amount')
-         .setRequired(true)
-      ),
+      .setDescription('Admin')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
 
     new SlashCommandBuilder()
       .setName('removecoins')
-      .setDescription('Admin only')
-      .addUserOption(o =>
-        o.setName('user')
-         .setDescription('Target')
-         .setRequired(true)
-      )
-      .addIntegerOption(o =>
-        o.setName('amount')
-         .setDescription('Amount')
-         .setRequired(true)
-      ),
+      .setDescription('Admin')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
 
     new SlashCommandBuilder()
       .setName('giveitem')
-      .setDescription('Admin only')
-      .addUserOption(o =>
-        o.setName('user')
-         .setDescription('Target')
-         .setRequired(true)
-      )
-      .addStringOption(o =>
-        o.setName('item')
-         .setDescription('Item name')
-         .setRequired(true)
-      )
+      .setDescription('Admin')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+      .addStringOption(o => o.setName('item').setDescription('Item').setRequired(true))
   ];
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -204,7 +165,6 @@ client.on('interactionCreate', async (i) => {
 
     if (i.isChatInputCommand()) {
       await i.deferReply();
-
       const user = getUser(i.user.id);
 
       if (i.commandName === "profile") {
@@ -216,17 +176,18 @@ Time: ${getLocalTime(user.timezone)}`
         );
       }
 
-      if (i.commandName === "settz") {
-        const tz = i.options.getString("zone");
+      if (i.commandName === "streak") {
+        return i.editReply(`🔥 Streak: ${user.streak} | Best: ${user.best}`);
+      }
 
-        try {
-          new Date().toLocaleString("en-US", { timeZone: tz });
-          user.timezone = tz;
-          save();
-          return i.editReply(`🌍 Timezone set to ${tz}`);
-        } catch {
-          return i.editReply("❌ Invalid timezone");
-        }
+      if (i.commandName === "settz") {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('tz_EST').setLabel('EST').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('tz_CST').setLabel('CST').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('tz_PST').setLabel('PST').setStyle(ButtonStyle.Primary)
+        );
+
+        return i.editReply({ content: "🌍 Choose timezone:", components: [row] });
       }
 
       if (i.commandName === "inventory") {
@@ -262,7 +223,7 @@ Time: ${getLocalTime(user.timezone)}`
         return i.editReply("💰 +50 coins");
       }
 
-      // ===== ADMIN =====
+      // ADMIN
       if (
         ["addcoins","removecoins","giveitem"].includes(i.commandName) &&
         !i.member.permissions.has(PermissionsBitField.Flags.Administrator)
@@ -275,16 +236,31 @@ Time: ${getLocalTime(user.timezone)}`
         const amt = i.options.getInteger("amount");
         getUser(u.id).coins += amt;
         save();
-        return i.editReply("✅ Added coins");
+        return i.editReply("✅ Added");
       }
-
     }
 
+    // ===== BUTTONS =====
     if (i.isButton()) {
       const user = getUser(i.user.id);
 
+      const tzMap = {
+        tz_EST: "America/New_York",
+        tz_CST: "America/Chicago",
+        tz_PST: "America/Los_Angeles"
+      };
+
+      if (tzMap[i.customId]) {
+        user.timezone = tzMap[i.customId];
+        save();
+
+        return i.reply({ content: "🌍 Timezone updated", ephemeral: true });
+      }
+
       if (i.customId === "buy_sword") {
-        if (user.coins < 100) return i.reply({ content: "❌ Not enough", ephemeral: true });
+        if (user.coins < 100) {
+          return i.reply({ content: "❌ Not enough coins", ephemeral: true });
+        }
 
         user.coins -= 100;
         user.inventory.push("sword");
@@ -301,12 +277,13 @@ Time: ${getLocalTime(user.timezone)}`
   }
 });
 
-// ===== XP =====
+// ===== XP + STREAK =====
 client.on('messageCreate', (msg) => {
   if (msg.author.bot) return;
 
   const user = getUser(msg.author.id);
   const now = Date.now();
+  const day = 86400000;
 
   if (!user.lastXp || now - user.lastXp > 60000) {
     user.xp += 10;
@@ -316,9 +293,17 @@ client.on('messageCreate', (msg) => {
       user.xp = 0;
       user.level++;
     }
-
-    save();
   }
+
+  if (!user.lastStreak) user.streak = 1;
+  else if (now - user.lastStreak < day) {}
+  else if (now - user.lastStreak < day * 2) user.streak++;
+  else user.streak = 1;
+
+  user.lastStreak = now;
+  if (user.streak > user.best) user.best = user.streak;
+
+  save();
 });
 
 client.login(TOKEN);
