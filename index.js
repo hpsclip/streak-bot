@@ -54,24 +54,8 @@ function getUser(id) {
   return data[id];
 }
 
-// ===== SYSTEMS =====
 function xpNeeded(level) {
   return 50 + level * 30;
-}
-
-// ===== ACHIEVEMENTS =====
-const achievements = {
-  level5: u => u.level >= 5,
-  rich: u => u.coins >= 200,
-  winner: u => u.wins >= 3
-};
-
-function checkAchievements(user) {
-  for (let key in achievements) {
-    if (!user.achievements.includes(key) && achievements[key](user)) {
-      user.achievements.push(key);
-    }
-  }
 }
 
 // ===== MATCHMAKING =====
@@ -101,8 +85,8 @@ async function startFight(p1, p2) {
   save();
 
   try {
-    await p1.send(`⚔️ Match result: ${winner.username} won`);
-    await p2.send(`⚔️ Match result: ${winner.username} won`);
+    await p1.send(`⚔️ ${winner.username} won the fight`);
+    await p2.send(`⚔️ ${winner.username} won the fight`);
   } catch {}
 }
 
@@ -117,29 +101,23 @@ async function deployCommands() {
     new SlashCommandBuilder().setName('leaderboard').setDescription('Top players'),
     new SlashCommandBuilder().setName('inventory').setDescription('View inventory'),
 
-    // ADMIN
     new SlashCommandBuilder()
       .setName('addcoins')
-      .setDescription('Add coins (admin)')
-      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
-      .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
+      .setDescription('Admin only')
+      .addUserOption(o => o.setName('user').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setRequired(true)),
 
     new SlashCommandBuilder()
       .setName('removecoins')
-      .setDescription('Remove coins (admin)')
-      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
-      .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName('resetuser')
-      .setDescription('Reset user (admin)')
-      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+      .setDescription('Admin only')
+      .addUserOption(o => o.setName('user').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setRequired(true)),
 
     new SlashCommandBuilder()
       .setName('giveitem')
-      .setDescription('Give item (admin)')
-      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
-      .addStringOption(o => o.setName('item').setDescription('Item name').setRequired(true))
+      .setDescription('Admin only')
+      .addUserOption(o => o.setName('user').setRequired(true))
+      .addStringOption(o => o.setName('item').setRequired(true))
   ];
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -159,121 +137,131 @@ client.on('ready', async () => {
 // ===== INTERACTIONS =====
 client.on('interactionCreate', async (i) => {
 
-  if (i.isChatInputCommand()) {
-    const user = getUser(i.user.id);
+  if (!i.isChatInputCommand() && !i.isButton()) return;
 
-    // ===== NORMAL COMMANDS =====
-    if (i.commandName === "profile") {
-      return i.reply(
+  try {
+
+    // ===== SLASH COMMANDS =====
+    if (i.isChatInputCommand()) {
+      await i.deferReply();
+
+      const user = getUser(i.user.id);
+
+      if (i.commandName === "profile") {
+        return i.editReply(
 `Level: ${user.level}
 XP: ${user.xp}/${xpNeeded(user.level)}
 Coins: ${user.coins}
 Wins: ${user.wins} | Losses: ${user.losses}`
-      );
-    }
-
-    if (i.commandName === "inventory") {
-      return i.reply(user.inventory.join(", ") || "Empty");
-    }
-
-    if (i.commandName === "leaderboard") {
-      const top = Object.entries(data)
-        .sort((a,b)=>b[1].level - a[1].level)
-        .slice(0,10);
-
-      return i.reply(
-        top.map((u,i)=>`#${i+1} <@${u[0]}> - Lv ${u[1].level}`).join("\n") || "No data"
-      );
-    }
-
-    if (i.commandName === "queue") {
-      if (!queue.find(p => p.id === i.user.id)) {
-        queue.push(i.user);
-        i.reply("✅ Added to queue");
-      } else {
-        i.reply("⚠️ Already queued");
+        );
       }
-      matchPlayers();
+
+      if (i.commandName === "inventory") {
+        return i.editReply(user.inventory.join(", ") || "Empty");
+      }
+
+      if (i.commandName === "leaderboard") {
+        const top = Object.entries(data)
+          .sort((a,b)=>b[1].level - a[1].level)
+          .slice(0,10);
+
+        return i.editReply(
+          top.map((u,i)=>`#${i+1} <@${u[0]}> - Lv ${u[1].level}`).join("\n") || "No data"
+        );
+      }
+
+      if (i.commandName === "queue") {
+        if (!queue.find(p => p.id === i.user.id)) {
+          queue.push(i.user);
+          matchPlayers();
+          return i.editReply("✅ Added to queue");
+        } else {
+          return i.editReply("⚠️ Already queued");
+        }
+      }
+
+      if (i.commandName === "shop") {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
+        );
+
+        return i.editReply({ content: "🛒 Shop:", components: [row] });
+      }
+
+      if (i.commandName === "daily") {
+        user.coins += 50;
+        save();
+        return i.editReply("💰 +50 coins");
+      }
+
+      // ===== ADMIN =====
+      if (
+        ["addcoins","removecoins","giveitem"].includes(i.commandName) &&
+        !i.member.permissions.has(PermissionsBitField.Flags.Administrator)
+      ) {
+        return i.editReply("❌ Admin only");
+      }
+
+      if (i.commandName === "addcoins") {
+        const target = i.options.getUser("user");
+        const amount = i.options.getInteger("amount");
+
+        getUser(target.id).coins += amount;
+        save();
+
+        return i.editReply(`✅ Added ${amount} coins`);
+      }
+
+      if (i.commandName === "removecoins") {
+        const target = i.options.getUser("user");
+        const amount = i.options.getInteger("amount");
+
+        getUser(target.id).coins -= amount;
+        save();
+
+        return i.editReply(`➖ Removed ${amount}`);
+      }
+
+      if (i.commandName === "giveitem") {
+        const target = i.options.getUser("user");
+        const item = i.options.getString("item");
+
+        getUser(target.id).inventory.push(item);
+        save();
+
+        return i.editReply(`🎁 Gave ${item}`);
+      }
     }
 
-    if (i.commandName === "shop") {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
-      );
-      i.reply({ content: "🛒 Shop:", components: [row] });
+    // ===== BUTTONS =====
+    if (i.isButton()) {
+      const user = getUser(i.user.id);
+
+      if (i.customId === "buy_sword") {
+        if (user.coins < 100) {
+          return i.reply({ content: "❌ Not enough coins", ephemeral: true });
+        }
+
+        user.coins -= 100;
+        user.inventory.push("sword");
+        save();
+
+        return i.reply({ content: "🗡️ Bought sword", ephemeral: true });
+      }
     }
 
-    if (i.commandName === "daily") {
-      user.coins += 50;
-      save();
-      i.reply("💰 +50 coins");
-    }
+  } catch (err) {
+    console.error(err);
 
-    // ===== ADMIN COMMANDS =====
-    if (
-      ["addcoins","removecoins","resetuser","giveitem"].includes(i.commandName) &&
-      !i.member.permissions.has(PermissionsBitField.Flags.Administrator)
-    ) {
-      return i.reply({ content: "❌ Admin only", ephemeral: true });
-    }
-
-    if (i.commandName === "addcoins") {
-      const target = i.options.getUser("user");
-      const amount = i.options.getInteger("amount");
-
-      getUser(target.id).coins += amount;
-      save();
-
-      return i.reply(`✅ Added ${amount} coins`);
-    }
-
-    if (i.commandName === "removecoins") {
-      const target = i.options.getUser("user");
-      const amount = i.options.getInteger("amount");
-
-      getUser(target.id).coins -= amount;
-      save();
-
-      return i.reply(`➖ Removed ${amount}`);
-    }
-
-    if (i.commandName === "resetuser") {
-      const target = i.options.getUser("user");
-      data[target.id] = null;
-      save();
-
-      return i.reply("♻️ User reset");
-    }
-
-    if (i.commandName === "giveitem") {
-      const target = i.options.getUser("user");
-      const item = i.options.getString("item");
-
-      getUser(target.id).inventory.push(item);
-      save();
-
-      return i.reply(`🎁 Gave ${item}`);
-    }
-  }
-
-  // ===== BUTTONS =====
-  if (i.isButton()) {
-    const user = getUser(i.user.id);
-
-    if (i.customId === "buy_sword") {
-      if (user.coins < 100)
-        return i.reply({ content: "❌ Not enough coins", ephemeral: true });
-
-      user.coins -= 100;
-      user.inventory.push("sword");
-      save();
-
-      return i.reply({ content: "🗡️ Bought sword", ephemeral: true });
+    if (i.deferred) {
+      i.editReply("❌ Error");
+    } else {
+      i.reply({ content: "❌ Error", ephemeral: true });
     }
   }
 });
 
-// ===== XP =====
+// ===== XP SYSTEM =====
 client.on('messageCreate', (msg) => {
   if (msg.author.bot) return;
 
@@ -289,7 +277,6 @@ client.on('messageCreate', (msg) => {
       user.level++;
     }
 
-    checkAchievements(user);
     save();
   }
 });
