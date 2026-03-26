@@ -13,12 +13,12 @@ const {
 const express = require('express');
 const fs = require('fs');
 
-// ===== WEB =====
+// ===== WEB (Railway keep-alive) =====
 const app = express();
 app.get('/', (req, res) => res.send("Bot running ✅"));
 app.listen(3000, () => console.log("Web online"));
 
-// ===== CLIENT =====
+// ===== DISCORD CLIENT =====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent]
 });
@@ -47,8 +47,7 @@ function getUser(id) {
       inventory: [],
       wins: 0,
       losses: 0,
-      lastXp: 0,
-      achievements: []
+      lastXp: 0
     };
   }
   return data[id];
@@ -94,36 +93,87 @@ async function startFight(p1, p2) {
 async function deployCommands() {
   const commands = [
 
-    new SlashCommandBuilder().setName('profile').setDescription('View profile'),
-    new SlashCommandBuilder().setName('queue').setDescription('Join matchmaking'),
-    new SlashCommandBuilder().setName('shop').setDescription('Open shop'),
-    new SlashCommandBuilder().setName('daily').setDescription('Daily coins'),
-    new SlashCommandBuilder().setName('leaderboard').setDescription('Top players'),
-    new SlashCommandBuilder().setName('inventory').setDescription('View inventory'),
+    new SlashCommandBuilder()
+      .setName('profile')
+      .setDescription('View your profile'),
 
     new SlashCommandBuilder()
+      .setName('queue')
+      .setDescription('Join matchmaking queue'),
+
+    new SlashCommandBuilder()
+      .setName('shop')
+      .setDescription('Open shop'),
+
+    new SlashCommandBuilder()
+      .setName('daily')
+      .setDescription('Claim daily coins'),
+
+    new SlashCommandBuilder()
+      .setName('leaderboard')
+      .setDescription('Top players'),
+
+    new SlashCommandBuilder()
+      .setName('inventory')
+      .setDescription('View your inventory'),
+
+    // ===== ADMIN =====
+    new SlashCommandBuilder()
       .setName('addcoins')
-      .setDescription('Admin only')
-      .addUserOption(o => o.setName('user').setRequired(true))
-      .addIntegerOption(o => o.setName('amount').setRequired(true)),
+      .setDescription('Add coins (admin)')
+      .addUserOption(o =>
+        o.setName('user')
+         .setDescription('Target user')
+         .setRequired(true)
+      )
+      .addIntegerOption(o =>
+        o.setName('amount')
+         .setDescription('Amount to add')
+         .setRequired(true)
+      ),
 
     new SlashCommandBuilder()
       .setName('removecoins')
-      .setDescription('Admin only')
-      .addUserOption(o => o.setName('user').setRequired(true))
-      .addIntegerOption(o => o.setName('amount').setRequired(true)),
+      .setDescription('Remove coins (admin)')
+      .addUserOption(o =>
+        o.setName('user')
+         .setDescription('Target user')
+         .setRequired(true)
+      )
+      .addIntegerOption(o =>
+        o.setName('amount')
+         .setDescription('Amount to remove')
+         .setRequired(true)
+      ),
 
     new SlashCommandBuilder()
       .setName('giveitem')
-      .setDescription('Admin only')
-      .addUserOption(o => o.setName('user').setRequired(true))
-      .addStringOption(o => o.setName('item').setRequired(true))
+      .setDescription('Give item (admin)')
+      .addUserOption(o =>
+        o.setName('user')
+         .setDescription('Target user')
+         .setRequired(true)
+      )
+      .addStringOption(o =>
+        o.setName('item')
+         .setDescription('Item name')
+         .setRequired(true)
+      )
   ];
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+  // clear old commands
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: [] }
+  );
+
+  // deploy new
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
 
   console.log("✅ Commands deployed");
 }
@@ -131,17 +181,21 @@ async function deployCommands() {
 // ===== READY =====
 client.on('ready', async () => {
   console.log(`✅ ${client.user.tag} online`);
-  await deployCommands();
+
+  try {
+    await deployCommands();
+  } catch (err) {
+    console.error("❌ Deploy failed:", err);
+  }
 });
 
 // ===== INTERACTIONS =====
 client.on('interactionCreate', async (i) => {
-
   if (!i.isChatInputCommand() && !i.isButton()) return;
 
   try {
 
-    // ===== SLASH COMMANDS =====
+    // ===== SLASH =====
     if (i.isChatInputCommand()) {
       await i.deferReply();
 
@@ -182,7 +236,10 @@ Wins: ${user.wins} | Losses: ${user.losses}`
 
       if (i.commandName === "shop") {
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
+          new ButtonBuilder()
+            .setCustomId('buy_sword')
+            .setLabel('Sword (100)')
+            .setStyle(ButtonStyle.Primary)
         );
 
         return i.editReply({ content: "🛒 Shop:", components: [row] });
@@ -194,7 +251,7 @@ Wins: ${user.wins} | Losses: ${user.losses}`
         return i.editReply("💰 +50 coins");
       }
 
-      // ===== ADMIN =====
+      // ===== ADMIN CHECK =====
       if (
         ["addcoins","removecoins","giveitem"].includes(i.commandName) &&
         !i.member.permissions.has(PermissionsBitField.Flags.Administrator)
