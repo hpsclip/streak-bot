@@ -12,14 +12,17 @@ const {
 const express = require('express');
 const fs = require('fs');
 
-// ===== WEB =====
+// ===== WEB (Railway keep-alive) =====
 const app = express();
 app.get('/', (req, res) => res.send("Bot running ✅"));
 app.listen(3000, () => console.log("Web online"));
 
-// ===== DISCORD =====
+// ===== DISCORD CLIENT =====
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 const TOKEN = process.env.TOKEN;
@@ -29,7 +32,8 @@ const GUILD_ID = process.env.GUILD_ID;
 // ===== DATA =====
 let data = {};
 if (fs.existsSync('data.json')) {
-  data = JSON.parse(fs.readFileSync('data.json'));
+  try { data = JSON.parse(fs.readFileSync('data.json')); }
+  catch { data = {}; }
 }
 
 function save() {
@@ -104,7 +108,7 @@ async function startFight(p1, p2) {
   } catch {}
 }
 
-// ===== DEPLOY COMMANDS =====
+// ===== DEPLOY SLASH COMMANDS =====
 async function deployCommands() {
   const commands = [
     new SlashCommandBuilder().setName('profile').setDescription('View profile'),
@@ -115,12 +119,19 @@ async function deployCommands() {
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
+  // 🔥 CLEAR OLD COMMANDS
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: [] }
+  );
+
+  // ✅ DEPLOY NEW COMMANDS
   await rest.put(
     Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
     { body: commands }
   );
 
-  console.log("✅ Slash commands deployed");
+  console.log("✅ Commands deployed clean");
 }
 
 // ===== READY =====
@@ -129,8 +140,10 @@ client.on('ready', async () => {
   await deployCommands();
 });
 
-// ===== SLASH COMMAND HANDLER =====
+// ===== INTERACTIONS =====
 client.on('interactionCreate', async (i) => {
+
+  // ===== SLASH COMMANDS =====
   if (i.isChatInputCommand()) {
     const user = getUser(i.user.id);
 
@@ -154,9 +167,9 @@ Wins: ${user.wins} | Losses: ${user.losses}`,
     if (i.commandName === "queue") {
       if (!queue.find(p => p.id === i.user.id)) {
         queue.push(i.user);
-        i.reply("✅ Added to queue");
+        i.reply("✅ Added to matchmaking queue");
       } else {
-        i.reply("⚠️ Already queued");
+        i.reply("⚠️ Already in queue");
       }
 
       matchPlayers();
@@ -183,13 +196,13 @@ Wins: ${user.wins} | Losses: ${user.losses}`,
 
     if (i.customId === "buy_sword") {
       if (user.coins < 100)
-        return i.reply({ content: "❌ Not enough", ephemeral: true });
+        return i.reply({ content: "❌ Not enough coins", ephemeral: true });
 
       user.coins -= 100;
       user.inventory.push("sword");
       save();
 
-      return i.reply({ content: "🗡️ Bought", ephemeral: true });
+      return i.reply({ content: "🗡️ Sword purchased", ephemeral: true });
     }
 
     if (i.customId === "inventory") {
