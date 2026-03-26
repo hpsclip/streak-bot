@@ -13,12 +13,12 @@ const {
 const express = require('express');
 const fs = require('fs');
 
-// ===== WEB (Railway keep-alive) =====
+// ===== WEB =====
 const app = express();
 app.get('/', (req, res) => res.send("Bot running ✅"));
 app.listen(3000, () => console.log("Web online"));
 
-// ===== DISCORD CLIENT =====
+// ===== CLIENT =====
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent]
 });
@@ -47,12 +47,23 @@ function getUser(id) {
       inventory: [],
       wins: 0,
       losses: 0,
-      lastXp: 0
+      lastXp: 0,
+      timezone: "UTC"
     };
   }
   return data[id];
 }
 
+// ===== TIME =====
+function getLocalTime(tz) {
+  try {
+    return new Date().toLocaleString("en-US", { timeZone: tz });
+  } catch {
+    return "Invalid timezone";
+  }
+}
+
+// ===== XP =====
 function xpNeeded(level) {
   return 50 + level * 30;
 }
@@ -84,8 +95,8 @@ async function startFight(p1, p2) {
   save();
 
   try {
-    await p1.send(`⚔️ ${winner.username} won the fight`);
-    await p2.send(`⚔️ ${winner.username} won the fight`);
+    await p1.send(`⚔️ ${winner.username} won`);
+    await p2.send(`⚔️ ${winner.username} won`);
   } catch {}
 }
 
@@ -95,11 +106,11 @@ async function deployCommands() {
 
     new SlashCommandBuilder()
       .setName('profile')
-      .setDescription('View your profile'),
+      .setDescription('View profile'),
 
     new SlashCommandBuilder()
       .setName('queue')
-      .setDescription('Join matchmaking queue'),
+      .setDescription('Join matchmaking'),
 
     new SlashCommandBuilder()
       .setName('shop')
@@ -107,7 +118,7 @@ async function deployCommands() {
 
     new SlashCommandBuilder()
       .setName('daily')
-      .setDescription('Claim daily coins'),
+      .setDescription('Daily coins'),
 
     new SlashCommandBuilder()
       .setName('leaderboard')
@@ -115,43 +126,53 @@ async function deployCommands() {
 
     new SlashCommandBuilder()
       .setName('inventory')
-      .setDescription('View your inventory'),
+      .setDescription('View inventory'),
+
+    // ===== TIMEZONE =====
+    new SlashCommandBuilder()
+      .setName('settz')
+      .setDescription('Set your timezone')
+      .addStringOption(o =>
+        o.setName('zone')
+         .setDescription('Example: America/New_York')
+         .setRequired(true)
+      ),
 
     // ===== ADMIN =====
     new SlashCommandBuilder()
       .setName('addcoins')
-      .setDescription('Add coins (admin)')
+      .setDescription('Admin only')
       .addUserOption(o =>
         o.setName('user')
-         .setDescription('Target user')
+         .setDescription('Target')
          .setRequired(true)
       )
       .addIntegerOption(o =>
         o.setName('amount')
-         .setDescription('Amount to add')
+         .setDescription('Amount')
          .setRequired(true)
       ),
 
     new SlashCommandBuilder()
       .setName('removecoins')
-      .setDescription('Remove coins (admin)')
+      .setDescription('Admin only')
       .addUserOption(o =>
         o.setName('user')
-         .setDescription('Target user')
+         .setDescription('Target')
          .setRequired(true)
       )
       .addIntegerOption(o =>
         o.setName('amount')
-         .setDescription('Amount to remove')
+         .setDescription('Amount')
          .setRequired(true)
       ),
 
     new SlashCommandBuilder()
       .setName('giveitem')
-      .setDescription('Give item (admin)')
+      .setDescription('Admin only')
       .addUserOption(o =>
         o.setName('user')
-         .setDescription('Target user')
+         .setDescription('Target')
          .setRequired(true)
       )
       .addStringOption(o =>
@@ -163,17 +184,8 @@ async function deployCommands() {
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-  // clear old commands
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: [] }
-  );
-
-  // deploy new
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 
   console.log("✅ Commands deployed");
 }
@@ -181,12 +193,7 @@ async function deployCommands() {
 // ===== READY =====
 client.on('ready', async () => {
   console.log(`✅ ${client.user.tag} online`);
-
-  try {
-    await deployCommands();
-  } catch (err) {
-    console.error("❌ Deploy failed:", err);
-  }
+  await deployCommands();
 });
 
 // ===== INTERACTIONS =====
@@ -195,7 +202,6 @@ client.on('interactionCreate', async (i) => {
 
   try {
 
-    // ===== SLASH =====
     if (i.isChatInputCommand()) {
       await i.deferReply();
 
@@ -206,8 +212,21 @@ client.on('interactionCreate', async (i) => {
 `Level: ${user.level}
 XP: ${user.xp}/${xpNeeded(user.level)}
 Coins: ${user.coins}
-Wins: ${user.wins} | Losses: ${user.losses}`
+Time: ${getLocalTime(user.timezone)}`
         );
+      }
+
+      if (i.commandName === "settz") {
+        const tz = i.options.getString("zone");
+
+        try {
+          new Date().toLocaleString("en-US", { timeZone: tz });
+          user.timezone = tz;
+          save();
+          return i.editReply(`🌍 Timezone set to ${tz}`);
+        } catch {
+          return i.editReply("❌ Invalid timezone");
+        }
       }
 
       if (i.commandName === "inventory") {
@@ -225,24 +244,16 @@ Wins: ${user.wins} | Losses: ${user.losses}`
       }
 
       if (i.commandName === "queue") {
-        if (!queue.find(p => p.id === i.user.id)) {
-          queue.push(i.user);
-          matchPlayers();
-          return i.editReply("✅ Added to queue");
-        } else {
-          return i.editReply("⚠️ Already queued");
-        }
+        queue.push(i.user);
+        matchPlayers();
+        return i.editReply("✅ Queued");
       }
 
       if (i.commandName === "shop") {
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('buy_sword')
-            .setLabel('Sword (100)')
-            .setStyle(ButtonStyle.Primary)
+          new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
         );
-
-        return i.editReply({ content: "🛒 Shop:", components: [row] });
+        return i.editReply({ content: "🛒 Shop", components: [row] });
       }
 
       if (i.commandName === "daily") {
@@ -251,7 +262,7 @@ Wins: ${user.wins} | Losses: ${user.losses}`
         return i.editReply("💰 +50 coins");
       }
 
-      // ===== ADMIN CHECK =====
+      // ===== ADMIN =====
       if (
         ["addcoins","removecoins","giveitem"].includes(i.commandName) &&
         !i.member.permissions.has(PermissionsBitField.Flags.Administrator)
@@ -260,44 +271,20 @@ Wins: ${user.wins} | Losses: ${user.losses}`
       }
 
       if (i.commandName === "addcoins") {
-        const target = i.options.getUser("user");
-        const amount = i.options.getInteger("amount");
-
-        getUser(target.id).coins += amount;
+        const u = i.options.getUser("user");
+        const amt = i.options.getInteger("amount");
+        getUser(u.id).coins += amt;
         save();
-
-        return i.editReply(`✅ Added ${amount} coins`);
+        return i.editReply("✅ Added coins");
       }
 
-      if (i.commandName === "removecoins") {
-        const target = i.options.getUser("user");
-        const amount = i.options.getInteger("amount");
-
-        getUser(target.id).coins -= amount;
-        save();
-
-        return i.editReply(`➖ Removed ${amount}`);
-      }
-
-      if (i.commandName === "giveitem") {
-        const target = i.options.getUser("user");
-        const item = i.options.getString("item");
-
-        getUser(target.id).inventory.push(item);
-        save();
-
-        return i.editReply(`🎁 Gave ${item}`);
-      }
     }
 
-    // ===== BUTTONS =====
     if (i.isButton()) {
       const user = getUser(i.user.id);
 
       if (i.customId === "buy_sword") {
-        if (user.coins < 100) {
-          return i.reply({ content: "❌ Not enough coins", ephemeral: true });
-        }
+        if (user.coins < 100) return i.reply({ content: "❌ Not enough", ephemeral: true });
 
         user.coins -= 100;
         user.inventory.push("sword");
@@ -309,16 +296,12 @@ Wins: ${user.wins} | Losses: ${user.losses}`
 
   } catch (err) {
     console.error(err);
-
-    if (i.deferred) {
-      i.editReply("❌ Error");
-    } else {
-      i.reply({ content: "❌ Error", ephemeral: true });
-    }
+    if (i.deferred) i.editReply("❌ Error");
+    else i.reply({ content: "❌ Error", ephemeral: true });
   }
 });
 
-// ===== XP SYSTEM =====
+// ===== XP =====
 client.on('messageCreate', (msg) => {
   if (msg.author.bot) return;
 
