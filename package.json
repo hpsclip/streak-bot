@@ -1,12 +1,13 @@
 {
-  "name": "streak-bot",
+  "name": "advanced-bot",
   "version": "1.0.0",
-  "description": "Discord streak bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1"
+    "discord.js": "^14.14.1",
+    "canvas": "^2.11.2",
+    "express": "^4.19.2"
   }
 }

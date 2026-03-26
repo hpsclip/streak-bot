@@ -1,31 +1,37 @@
 const {
   Client,
   GatewayIntentBits,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  EmbedBuilder
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  AttachmentBuilder
 } = require('discord.js');
 
+const express = require('express');
 const fs = require('fs');
+const { createCanvas } = require('canvas');
 
-const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
+const app = express();
 
-// ===== CLIENT =====
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+// ===== WEB DASHBOARD =====
+app.get('/', (req, res) => {
+  res.send("Bot is running ✅");
 });
 
-// ===== DATA =====
+app.listen(3000, () => console.log("Web panel running"));
+
+// ===== DISCORD =====
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
 let data = {};
 if (fs.existsSync('data.json')) {
-  try {
-    data = JSON.parse(fs.readFileSync('data.json'));
-  } catch {
-    data = {};
-  }
+  data = JSON.parse(fs.readFileSync('data.json'));
 }
 
 function save() {
@@ -35,173 +41,130 @@ function save() {
 function getUser(id) {
   if (!data[id]) {
     data[id] = {
-      streak: 0,
-      best: 0,
-      last: 0,
-      fails: 0,
+      xp: 0,
+      level: 1,
       coins: 0,
-      shields: 0,
-      lastDaily: 0
+      inventory: [],
+      wins: 0,
+      losses: 0,
+      lastXp: 0
     };
   }
   return data[id];
 }
 
-// ===== RANK =====
-function getRank(s) {
-  if (s >= 50) return "👑 Legend";
-  if (s >= 25) return "🏆 Pro";
-  if (s >= 10) return "🔥 Grinder";
-  if (s >= 5) return "⚡ Active";
-  return "🌱 Beginner";
+// ===== MATCHMAKING =====
+let queue = [];
+
+function matchPlayers() {
+  if (queue.length >= 2) {
+    const p1 = queue.shift();
+    const p2 = queue.shift();
+
+    startFight(p1, p2);
+  }
 }
 
-// ===== AUTO DEPLOY COMMANDS =====
-async function deployCommands() {
-  const commands = [
-    new SlashCommandBuilder().setName('streak').setDescription('Check streak'),
-    new SlashCommandBuilder().setName('profile').setDescription('Profile'),
-    new SlashCommandBuilder().setName('daily').setDescription('Daily reward'),
-    new SlashCommandBuilder().setName('shop').setDescription('Shop'),
-    new SlashCommandBuilder().setName('leaderboard').setDescription('Leaderboard'),
-    new SlashCommandBuilder()
-      .setName('buy')
-      .setDescription('Buy item')
-      .addStringOption(o => o.setName('item').setRequired(true))
-  ];
+async function startFight(p1, p2) {
+  const u1 = getUser(p1.id);
+  const u2 = getUser(p2.id);
 
-  const rest = new REST({ version: '10' }).setToken(TOKEN);
+  let p1Power = u1.level + (u1.inventory.includes("sword") ? 5 : 0);
+  let p2Power = u2.level + (u2.inventory.includes("sword") ? 5 : 0);
 
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: [] }
-  );
+  let winner = p1Power > p2Power ? p1 : p2;
+  let loser = winner === p1 ? p2 : p1;
 
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
+  getUser(winner.id).wins++;
+  getUser(loser.id).losses++;
 
-  console.log("✅ Commands deployed");
+  save();
+
+  p1.send(`⚔️ Match result: ${winner.username} won`);
+  p2.send(`⚔️ Match result: ${winner.username} won`);
+}
+
+// ===== RANK CARD =====
+function rankCard(user, name) {
+  const canvas = createCanvas(600, 200);
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = "#111";
+  ctx.fillRect(0, 0, 600, 200);
+
+  ctx.fillStyle = "#0f0";
+  ctx.fillText(name, 20, 40);
+  ctx.fillText(`Level: ${user.level}`, 20, 80);
+  ctx.fillText(`XP: ${user.xp}`, 20, 110);
+
+  return canvas.toBuffer();
 }
 
 // ===== READY =====
-client.on('clientReady', async () => {
-  console.log(`✅ ${client.user.tag} online`);
-  await deployCommands();
+client.on('ready', () => {
+  console.log("Bot ready");
 });
 
 // ===== COMMANDS =====
-client.on('interactionCreate', async (i) => {
-  if (!i.isChatInputCommand()) return;
-
-  const user = getUser(i.user.id);
-
-  try {
-    await i.deferReply();
-
-    if (i.commandName === 'streak') {
-      return i.editReply(`🔥 Streak: ${user.streak} | Best: ${user.best}`);
-    }
-
-    if (i.commandName === 'profile') {
-      return i.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(i.user.username)
-            .setDescription(
-              `Rank: ${getRank(user.streak)}\nStreak: ${user.streak}\nCoins: ${user.coins}\nShields: ${user.shields}`
-            )
-        ]
-      });
-    }
-
-    if (i.commandName === 'daily') {
-      const now = Date.now();
-
-      if (now - user.lastDaily < 86400000) {
-        return i.editReply("⏳ Already claimed");
-      }
-
-      const reward = 10 + user.streak * 2;
-      user.coins += reward;
-      user.lastDaily = now;
-
-      save();
-      return i.editReply(`💰 +${reward} coins`);
-    }
-
-    if (i.commandName === 'shop') {
-      return i.editReply("🛒 shield = 100 coins");
-    }
-
-    if (i.commandName === 'buy') {
-      const item = i.options.getString('item');
-
-      if (item !== "shield") return i.editReply("❌ Invalid item");
-      if (user.coins < 100) return i.editReply("❌ Not enough coins");
-
-      user.coins -= 100;
-      user.shields++;
-
-      save();
-      return i.editReply("🛡️ Shield bought");
-    }
-
-    if (i.commandName === 'leaderboard') {
-      const top = Object.entries(data)
-        .sort((a, b) => b[1].streak - a[1].streak)
-        .slice(0, 10);
-
-      const text = top.map((u, i) =>
-        `#${i + 1} <@${u[0]}> - ${u[1].streak}`
-      ).join("\n") || "No data";
-
-      return i.editReply(text);
-    }
-
-  } catch (err) {
-    console.error(err);
-    i.editReply("❌ Error");
-  }
-});
-
-// ===== STREAK SYSTEM =====
-client.on('messageCreate', (msg) => {
+client.on('messageCreate', async (msg) => {
   if (msg.author.bot) return;
 
   const user = getUser(msg.author.id);
   const now = Date.now();
-  const day = 86400000;
 
-  if (!user.last) {
-    user.streak = 1;
-    user.last = now;
-    save();
-    return;
-  }
+  // XP SYSTEM
+  if (now - user.lastXp > 60000) {
+    user.xp += 10;
+    user.lastXp = now;
 
-  if (now - user.last < day) return;
-
-  if (now - user.last < day * 2) {
-    user.streak++;
-    user.fails = 0;
-  } else {
-    if (user.shields > 0) {
-      user.shields--;
-    } else {
-      user.fails++;
-      if (user.fails >= 3) {
-        user.streak = 1;
-        user.fails = 0;
-      }
+    if (user.xp >= 100) {
+      user.level++;
+      user.xp = 0;
     }
   }
 
-  user.last = now;
-  if (user.streak > user.best) user.best = user.streak;
+  // COMMANDS (TEXT → YOU CAN SWITCH TO SLASH LATER)
+  if (msg.content === "!profile") {
+    return msg.reply(`Level: ${user.level}\nCoins: ${user.coins}`);
+  }
 
-  save();
+  if (msg.content === "!rank") {
+    const img = rankCard(user, msg.author.username);
+    return msg.reply({ files: [new AttachmentBuilder(img)] });
+  }
+
+  if (msg.content === "!queue") {
+    if (!queue.find(p => p.id === msg.author.id)) {
+      queue.push(msg.author);
+      msg.reply("✅ Added to matchmaking queue");
+    }
+    matchPlayers();
+  }
+
+  if (msg.content === "!shop") {
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
+    );
+
+    msg.reply({ content: "Shop:", components: [row] });
+  }
 });
 
-client.login(TOKEN);
+// ===== BUTTONS =====
+client.on('interactionCreate', async (i) => {
+  if (!i.isButton()) return;
+
+  const user = getUser(i.user.id);
+
+  if (i.customId === "buy_sword") {
+    if (user.coins < 100) return i.reply({ content: "❌ Not enough", ephemeral: true });
+
+    user.coins -= 100;
+    user.inventory.push("sword");
+    save();
+
+    return i.reply({ content: "🗡️ Sword bought", ephemeral: true });
+  }
+});
+
+client.login(process.env.TOKEN);
