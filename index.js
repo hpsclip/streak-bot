@@ -6,23 +6,21 @@ const {
   SlashCommandBuilder,
   ActionRowBuilder,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  PermissionsBitField
 } = require('discord.js');
 
 const express = require('express');
 const fs = require('fs');
 
-// ===== WEB (Railway keep-alive) =====
+// ===== WEB =====
 const app = express();
 app.get('/', (req, res) => res.send("Bot running ✅"));
 app.listen(3000, () => console.log("Web online"));
 
-// ===== DISCORD CLIENT =====
+// ===== CLIENT =====
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent]
 });
 
 const TOKEN = process.env.TOKEN;
@@ -108,30 +106,48 @@ async function startFight(p1, p2) {
   } catch {}
 }
 
-// ===== DEPLOY SLASH COMMANDS =====
+// ===== DEPLOY COMMANDS =====
 async function deployCommands() {
   const commands = [
+
     new SlashCommandBuilder().setName('profile').setDescription('View profile'),
     new SlashCommandBuilder().setName('queue').setDescription('Join matchmaking'),
     new SlashCommandBuilder().setName('shop').setDescription('Open shop'),
-    new SlashCommandBuilder().setName('daily').setDescription('Daily coins')
+    new SlashCommandBuilder().setName('daily').setDescription('Daily coins'),
+    new SlashCommandBuilder().setName('leaderboard').setDescription('Top players'),
+    new SlashCommandBuilder().setName('inventory').setDescription('View inventory'),
+
+    // ADMIN
+    new SlashCommandBuilder()
+      .setName('addcoins')
+      .setDescription('Add coins (admin)')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('removecoins')
+      .setDescription('Remove coins (admin)')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+      .addIntegerOption(o => o.setName('amount').setDescription('Amount').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('resetuser')
+      .setDescription('Reset user (admin)')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('giveitem')
+      .setDescription('Give item (admin)')
+      .addUserOption(o => o.setName('user').setDescription('User').setRequired(true))
+      .addStringOption(o => o.setName('item').setDescription('Item name').setRequired(true))
   ];
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-  // 🔥 CLEAR OLD COMMANDS
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: [] }
-  );
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 
-  // ✅ DEPLOY NEW COMMANDS
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
-
-  console.log("✅ Commands deployed clean");
+  console.log("✅ Commands deployed");
 }
 
 // ===== READY =====
@@ -143,35 +159,40 @@ client.on('ready', async () => {
 // ===== INTERACTIONS =====
 client.on('interactionCreate', async (i) => {
 
-  // ===== SLASH COMMANDS =====
   if (i.isChatInputCommand()) {
     const user = getUser(i.user.id);
 
+    // ===== NORMAL COMMANDS =====
     if (i.commandName === "profile") {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('stats').setLabel('Stats').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('inventory').setLabel('Inventory').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('achievements').setLabel('Achievements').setStyle(ButtonStyle.Success)
-      );
-
-      return i.reply({
-        content:
+      return i.reply(
 `Level: ${user.level}
 XP: ${user.xp}/${xpNeeded(user.level)}
 Coins: ${user.coins}
-Wins: ${user.wins} | Losses: ${user.losses}`,
-        components: [row]
-      });
+Wins: ${user.wins} | Losses: ${user.losses}`
+      );
+    }
+
+    if (i.commandName === "inventory") {
+      return i.reply(user.inventory.join(", ") || "Empty");
+    }
+
+    if (i.commandName === "leaderboard") {
+      const top = Object.entries(data)
+        .sort((a,b)=>b[1].level - a[1].level)
+        .slice(0,10);
+
+      return i.reply(
+        top.map((u,i)=>`#${i+1} <@${u[0]}> - Lv ${u[1].level}`).join("\n") || "No data"
+      );
     }
 
     if (i.commandName === "queue") {
       if (!queue.find(p => p.id === i.user.id)) {
         queue.push(i.user);
-        i.reply("✅ Added to matchmaking queue");
+        i.reply("✅ Added to queue");
       } else {
-        i.reply("⚠️ Already in queue");
+        i.reply("⚠️ Already queued");
       }
-
       matchPlayers();
     }
 
@@ -179,7 +200,6 @@ Wins: ${user.wins} | Losses: ${user.losses}`,
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
       );
-
       i.reply({ content: "🛒 Shop:", components: [row] });
     }
 
@@ -187,6 +207,52 @@ Wins: ${user.wins} | Losses: ${user.losses}`,
       user.coins += 50;
       save();
       i.reply("💰 +50 coins");
+    }
+
+    // ===== ADMIN COMMANDS =====
+    if (
+      ["addcoins","removecoins","resetuser","giveitem"].includes(i.commandName) &&
+      !i.member.permissions.has(PermissionsBitField.Flags.Administrator)
+    ) {
+      return i.reply({ content: "❌ Admin only", ephemeral: true });
+    }
+
+    if (i.commandName === "addcoins") {
+      const target = i.options.getUser("user");
+      const amount = i.options.getInteger("amount");
+
+      getUser(target.id).coins += amount;
+      save();
+
+      return i.reply(`✅ Added ${amount} coins`);
+    }
+
+    if (i.commandName === "removecoins") {
+      const target = i.options.getUser("user");
+      const amount = i.options.getInteger("amount");
+
+      getUser(target.id).coins -= amount;
+      save();
+
+      return i.reply(`➖ Removed ${amount}`);
+    }
+
+    if (i.commandName === "resetuser") {
+      const target = i.options.getUser("user");
+      data[target.id] = null;
+      save();
+
+      return i.reply("♻️ User reset");
+    }
+
+    if (i.commandName === "giveitem") {
+      const target = i.options.getUser("user");
+      const item = i.options.getString("item");
+
+      getUser(target.id).inventory.push(item);
+      save();
+
+      return i.reply(`🎁 Gave ${item}`);
     }
   }
 
@@ -202,37 +268,12 @@ Wins: ${user.wins} | Losses: ${user.losses}`,
       user.inventory.push("sword");
       save();
 
-      return i.reply({ content: "🗡️ Sword purchased", ephemeral: true });
-    }
-
-    if (i.customId === "inventory") {
-      return i.reply({
-        content: user.inventory.join(", ") || "Empty",
-        ephemeral: true
-      });
-    }
-
-    if (i.customId === "achievements") {
-      return i.reply({
-        content: user.achievements.join(", ") || "None",
-        ephemeral: true
-      });
-    }
-
-    if (i.customId === "stats") {
-      return i.reply({
-        content:
-`Level: ${user.level}
-XP: ${user.xp}
-Wins: ${user.wins}
-Losses: ${user.losses}`,
-        ephemeral: true
-      });
+      return i.reply({ content: "🗡️ Bought sword", ephemeral: true });
     }
   }
 });
 
-// ===== XP SYSTEM =====
+// ===== XP =====
 client.on('messageCreate', (msg) => {
   if (msg.author.bot) return;
 
