@@ -19,7 +19,11 @@ const GUILD_ID = process.env.GUILD_ID;
 
 // ===== CLIENT =====
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 // ===== DATA =====
@@ -43,10 +47,10 @@ function getUser(id) {
       wins: 0,
       losses: 0,
       lastXp: 0,
-      timezone: "America/New_York",
+      timezone: null,
       streak: 0,
       best: 0,
-      lastStreak: 0
+      lastDay: null
     };
   }
   return data[id];
@@ -57,66 +61,87 @@ function xpNeeded(level) {
   return 50 + level * 30;
 }
 
-function getTime(tz) {
-  try {
-    return new Date().toLocaleString("en-US", { timeZone: tz });
-  } catch {
-    return "Invalid";
-  }
+function getUserDay(user) {
+  const tz = user.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const now = new Date().toLocaleString("en-US", { timeZone: tz });
+  const d = new Date(now);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
-// ===== MATCHMAKING =====
-let queue = [];
+// ===== LOGS =====
+let LOG_CHANNEL = null;
 
-function matchPlayers() {
-  if (queue.length >= 2) {
-    const p1 = queue.shift();
-    const p2 = queue.shift();
-
-    const u1 = getUser(p1.id);
-    const u2 = getUser(p2.id);
-
-    const p1Power = u1.level + (u1.inventory.includes("sword") ? 5 : 0);
-    const p2Power = u2.level + (u2.inventory.includes("sword") ? 5 : 0);
-
-    const winner = p1Power >= p2Power ? p1 : p2;
-
-    getUser(winner.id).wins++;
-
-    save();
-
-    p1.send(`⚔️ ${winner.username} won`).catch(()=>{});
-    p2.send(`⚔️ ${winner.username} won`).catch(()=>{});
-  }
+async function log(guild, msg) {
+  if (!LOG_CHANNEL) return;
+  const ch = guild.channels.cache.get(LOG_CHANNEL);
+  if (ch) ch.send(msg).catch(()=>{});
 }
 
-// ===== FORCE DEPLOY =====
+// ===== COMMAND DEPLOY =====
 async function deployCommands() {
   const commands = [
-    new SlashCommandBuilder().setName('ping').setDescription('Test'),
 
+    // CORE
     new SlashCommandBuilder().setName('profile').setDescription('Profile'),
     new SlashCommandBuilder().setName('streak').setDescription('Streak'),
-    new SlashCommandBuilder().setName('queue').setDescription('Matchmaking'),
-    new SlashCommandBuilder().setName('shop').setDescription('Shop'),
     new SlashCommandBuilder().setName('daily').setDescription('Daily'),
-    new SlashCommandBuilder().setName('leaderboard').setDescription('Leaderboard'),
+    new SlashCommandBuilder().setName('shop').setDescription('Shop'),
     new SlashCommandBuilder().setName('inventory').setDescription('Inventory'),
-    new SlashCommandBuilder().setName('settz').setDescription('Timezone'),
+    new SlashCommandBuilder().setName('leaderboard').setDescription('Leaderboard'),
+
+    // ADMIN PANEL
+    new SlashCommandBuilder().setName('adminpanel').setDescription('Open admin UI'),
+
+    // ADMIN COMMANDS
+    new SlashCommandBuilder()
+      .setName('givecoins')
+      .setDescription('Give coins')
+      .addUserOption(o=>o.setName('user').setRequired(true))
+      .addIntegerOption(o=>o.setName('amount').setRequired(true)),
 
     new SlashCommandBuilder()
-      .setName('addcoins')
-      .setDescription('Admin')
+      .setName('setlevel')
+      .setDescription('Set level')
       .addUserOption(o=>o.setName('user').setRequired(true))
+      .addIntegerOption(o=>o.setName('level').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('resetuser')
+      .setDescription('Reset user')
+      .addUserOption(o=>o.setName('user').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('setlogchannel')
+      .setDescription('Set logs channel')
+      .addChannelOption(o=>o.setName('channel').setRequired(true)),
+
+    // MODERATION
+    new SlashCommandBuilder()
+      .setName('ban')
+      .setDescription('Ban user')
+      .addUserOption(o=>o.setName('user').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('kick')
+      .setDescription('Kick user')
+      .addUserOption(o=>o.setName('user').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('timeout')
+      .setDescription('Timeout user')
+      .addUserOption(o=>o.setName('user').setRequired(true))
+      .addIntegerOption(o=>o.setName('minutes').setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName('clear')
+      .setDescription('Clear messages')
       .addIntegerOption(o=>o.setName('amount').setRequired(true))
   ];
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-  console.log("🧹 Clearing commands...");
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: [] });
 
-  console.log("🚀 Deploying...");
   await rest.put(
     Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
     { body: commands.map(c => c.toJSON()) }
@@ -128,10 +153,6 @@ async function deployCommands() {
 // ===== READY =====
 client.once('ready', async () => {
   console.log(`✅ ${client.user.tag} online`);
-
-  console.log("CLIENT:", CLIENT_ID);
-  console.log("GUILD:", GUILD_ID);
-
   await deployCommands();
 });
 
@@ -141,38 +162,22 @@ client.on('interactionCreate', async (i) => {
 
   try {
 
+    // ===== SLASH =====
     if (i.isChatInputCommand()) {
       await i.deferReply();
       const user = getUser(i.user.id);
 
-      if (i.commandName === "ping") {
-        return i.editReply("🏓 Pong");
-      }
-
+      // ===== BASIC =====
       if (i.commandName === "profile") {
         return i.editReply(
 `Level: ${user.level}
 XP: ${user.xp}/${xpNeeded(user.level)}
-Coins: ${user.coins}
-Time: ${getTime(user.timezone)}`
+Coins: ${user.coins}`
         );
       }
 
       if (i.commandName === "streak") {
         return i.editReply(`🔥 ${user.streak} (Best: ${user.best})`);
-      }
-
-      if (i.commandName === "queue") {
-        queue.push(i.user);
-        matchPlayers();
-        return i.editReply("✅ Queued");
-      }
-
-      if (i.commandName === "shop") {
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
-        );
-        return i.editReply({ content: "🛒 Shop", components: [row] });
       }
 
       if (i.commandName === "daily") {
@@ -195,21 +200,33 @@ Time: ${getTime(user.timezone)}`
         );
       }
 
-      if (i.commandName === "settz") {
+      // ===== SHOP =====
+      if (i.commandName === "shop") {
         const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('tz_EST').setLabel('EST').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('tz_CST').setLabel('CST').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('tz_PST').setLabel('PST').setStyle(ButtonStyle.Primary)
+          new ButtonBuilder().setCustomId('buy_sword').setLabel('Sword (100)').setStyle(ButtonStyle.Primary)
         );
-
-        return i.editReply({ content: "Choose timezone:", components: [row] });
+        return i.editReply({ content: "🛒 Shop", components: [row] });
       }
 
-      // ADMIN
-      if (i.commandName === "addcoins") {
-        if (!i.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-          return i.editReply("❌ Admin only");
-        }
+      // ===== ADMIN CHECK =====
+      const isAdmin = i.member.permissions.has(PermissionsBitField.Flags.Administrator);
+
+      // ===== ADMIN PANEL =====
+      if (i.commandName === "adminpanel") {
+        if (!isAdmin) return i.editReply("❌ Admin only");
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('panel_give').setLabel('Give Coins').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId('panel_reset').setLabel('Reset User').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId('panel_logs').setLabel('Logs Info').setStyle(ButtonStyle.Secondary)
+        );
+
+        return i.editReply({ content: "🛠️ Admin Panel", components: [row] });
+      }
+
+      // ===== ADMIN COMMANDS =====
+      if (i.commandName === "givecoins") {
+        if (!isAdmin) return i.editReply("❌");
 
         const u = i.options.getUser("user");
         const amt = i.options.getInteger("amount");
@@ -217,15 +234,104 @@ Time: ${getTime(user.timezone)}`
         getUser(u.id).coins += amt;
         save();
 
-        return i.editReply("✅ Added");
+        log(i.guild, `💰 ${u.tag} +${amt}`);
+
+        return i.editReply("✅ Done");
+      }
+
+      if (i.commandName === "setlevel") {
+        if (!isAdmin) return i.editReply("❌");
+
+        const u = i.options.getUser("user");
+        const lvl = i.options.getInteger("level");
+
+        getUser(u.id).level = lvl;
+        save();
+
+        log(i.guild, `📊 ${u.tag} level set to ${lvl}`);
+
+        return i.editReply("✅ Done");
+      }
+
+      if (i.commandName === "resetuser") {
+        if (!isAdmin) return i.editReply("❌");
+
+        const u = i.options.getUser("user");
+
+        data[u.id] = undefined;
+        save();
+
+        log(i.guild, `♻️ Reset ${u.tag}`);
+
+        return i.editReply("✅ Reset");
+      }
+
+      if (i.commandName === "setlogchannel") {
+        if (!isAdmin) return i.editReply("❌");
+
+        LOG_CHANNEL = i.options.getChannel("channel").id;
+
+        return i.editReply("✅ Logs channel set");
+      }
+
+      // ===== MODERATION =====
+      if (i.commandName === "ban") {
+        if (!isAdmin) return i.editReply("❌");
+
+        const u = i.options.getUser("user");
+        await i.guild.members.ban(u.id);
+
+        log(i.guild, `🔨 Banned ${u.tag}`);
+
+        return i.editReply("✅ Banned");
+      }
+
+      if (i.commandName === "kick") {
+        if (!isAdmin) return i.editReply("❌");
+
+        const u = i.options.getUser("user");
+        await i.guild.members.kick(u.id);
+
+        log(i.guild, `👢 Kicked ${u.tag}`);
+
+        return i.editReply("✅ Kicked");
+      }
+
+      if (i.commandName === "timeout") {
+        if (!isAdmin) return i.editReply("❌");
+
+        const u = i.options.getUser("user");
+        const mins = i.options.getInteger("minutes");
+
+        const member = await i.guild.members.fetch(u.id);
+        await member.timeout(mins * 60000);
+
+        log(i.guild, `⏱️ Timeout ${u.tag} ${mins}m`);
+
+        return i.editReply("✅ Timeout");
+      }
+
+      if (i.commandName === "clear") {
+        if (!isAdmin) return i.editReply("❌");
+
+        const amt = i.options.getInteger("amount");
+        await i.channel.bulkDelete(amt);
+
+        log(i.guild, `🧹 Cleared ${amt}`);
+
+        return i.editReply("✅ Cleared");
       }
     }
 
     // ===== BUTTONS =====
     if (i.isButton()) {
-      const user = getUser(i.user.id);
+      if (!i.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        return i.reply({ content: "❌ Admin only", ephemeral: true });
+      }
 
       if (i.customId === "buy_sword") {
+        const user = getUser(i.user.id);
+
         if (user.coins < 100) {
           return i.reply({ content: "❌ Not enough", ephemeral: true });
         }
@@ -237,36 +343,34 @@ Time: ${getTime(user.timezone)}`
         return i.reply({ content: "🗡️ Bought", ephemeral: true });
       }
 
-      const tzMap = {
-        tz_EST: "America/New_York",
-        tz_CST: "America/Chicago",
-        tz_PST: "America/Los_Angeles"
-      };
+      if (i.customId === "panel_give") {
+        return i.reply({ content: "Use /givecoins", ephemeral: true });
+      }
 
-      if (tzMap[i.customId]) {
-        user.timezone = tzMap[i.customId];
-        save();
+      if (i.customId === "panel_reset") {
+        return i.reply({ content: "Use /resetuser", ephemeral: true });
+      }
 
-        return i.reply({ content: "🌍 Time updated", ephemeral: true });
+      if (i.customId === "panel_logs") {
+        return i.reply({ content: `Logs channel: ${LOG_CHANNEL || "Not set"}`, ephemeral: true });
       }
     }
 
   } catch (err) {
     console.error(err);
-
     if (i.deferred) i.editReply("❌ Error");
     else i.reply({ content: "❌ Error", ephemeral: true });
   }
 });
 
-// ===== XP + STREAK =====
+// ===== XP + FIXED STREAK =====
 client.on('messageCreate', (msg) => {
   if (msg.author.bot) return;
 
   const user = getUser(msg.author.id);
-  const now = Date.now();
-  const day = 86400000;
 
+  // XP
+  const now = Date.now();
   if (!user.lastXp || now - user.lastXp > 60000) {
     user.xp += 10;
     user.lastXp = now;
@@ -277,12 +381,27 @@ client.on('messageCreate', (msg) => {
     }
   }
 
-  if (!user.lastStreak) user.streak = 1;
-  else if (now - user.lastStreak < day) {}
-  else if (now - user.lastStreak < day * 2) user.streak++;
-  else user.streak = 1;
+  // STREAK (FIXED)
+  const today = getUserDay(user);
 
-  user.lastStreak = now;
+  if (!user.lastDay) {
+    user.streak = 1;
+  } else if (user.lastDay === today) {
+    // same day, do nothing
+  } else {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const yDay = `${yesterday.getFullYear()}-${yesterday.getMonth()}-${yesterday.getDate()}`;
+
+    if (user.lastDay === yDay) {
+      user.streak++;
+    } else {
+      user.streak = 1;
+    }
+  }
+
+  user.lastDay = today;
 
   if (user.streak > user.best) user.best = user.streak;
 
